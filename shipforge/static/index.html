@@ -811,16 +811,14 @@ $('preview').onclick = async () => {
   await pollJob(j.job, 'preview');
 };
 
+// fsd:'auto' touches the client's static tables only when their inputs changed.
+// A placement change is then a pure resource publish, which cannot leave the
+// client unable to log in - an apply is a rollback plus a multi-minute compile,
+// and anything failing in between strands the tables pristine with no typeID.
 $('deploy').onclick = async () => {
-  const st = await getJSON('/api/status');
-  if(st.clientRunning){
-    log('Close the EVE client first. Also: be DOCKED if the server will restart.');
-    return;
-  }
-  if(!confirm('Deploy to the live client?\n\nFSD apply, then republish resources.\n' +
-              'Be docked if the server is restarting.')) return;
   await post('/api/project/' + project.name, project);
-  const j = await post('/api/deploy', {project, fsd:true, restartServer:false});
+  const j = await post('/api/deploy',
+                       {project, fsd:'auto', restartServer:false});
   await pollJob(j.job, 'deploy');
 };
 $('verify').onclick = async () => {

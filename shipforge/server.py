@@ -182,8 +182,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"job": job["id"]})
             if route == "/api/deploy":
                 body = self.read_json()
+                # fsd may be "auto" (decide from the inputs), or a bool to force
+                requested = body.get("fsd", "auto")
+                fsd = requested if requested == "auto" else bool(requested)
                 job = start_job("deploy", lambda log: pipeline.deploy(
-                    body["project"], log, fsd=bool(body.get("fsd", True)),
+                    body["project"], log, fsd=fsd,
                     restart_server=bool(body.get("restartServer", False))))
                 return self.send_json({"job": job["id"]})
             if route == "/api/preview":

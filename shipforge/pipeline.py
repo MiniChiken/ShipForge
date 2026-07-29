@@ -50,12 +50,64 @@ def _run(sink, args, cwd=None, env=None):
 
 
 def client_running():
-    out = subprocess.run(
+    """True if an EVE client (or its crash monitor) is up.
+
+    Fails SAFE: if the check itself cannot answer, report "running". Treating an
+    unanswered check as "closed" let a deploy start, roll the FSD bundle back,
+    and only then hit the suite's own client check - leaving the tables pristine
+    and the ship's typeID gone.
+    """
+    probe = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "(Get-Process exefile,eve_crashmon,evelauncher "
          "-ErrorAction SilentlyContinue).Count"],
-        capture_output=True, text=True).stdout
-    return (out or "0").strip() not in ("", "0")
+        capture_output=True, text=True)
+    if probe.returncode != 0:
+        return True
+    text = (probe.stdout or "").strip()
+    if not text.isdigit():
+        return True
+    return int(text) > 0
+
+
+FSD_FIELDS = ("typeID", "graphicID", "hullName", "sofFaction", "sofRace",
+              "iconFolder", "dogma", "displayName")
+
+
+def fsd_fingerprint(project):
+    """Hash of everything that decides the CLIENT'S STATIC TABLES.
+
+    Includes fsd_insert.py's source, because that module - not the project -
+    holds the donor typeIDs and the slot/tank values it patches, so editing it
+    is a real FSD change even when the project is untouched.
+    """
+    payload = {k: project.get(k) for k in FSD_FIELDS}
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8"))
+    source = TOOLS / "fsd_insert.py"
+    if source.is_file():
+        digest.update(source.read_bytes())
+    return digest.hexdigest()
+
+
+def fsd_stamp_path(project):
+    return TOOLS / "native_out" / ("%s.fsdstamp.json" % project["hullName"])
+
+
+def fsd_is_current(project):
+    """(is_current, reason) for the applied FSD bundle versus this project."""
+    stamp = fsd_stamp_path(project)
+    if not stamp.is_file():
+        return False, "no FSD bundle has been applied by ShipForge yet"
+    try:
+        recorded = json.loads(stamp.read_text("utf-8")).get("fingerprint")
+    except (OSError, ValueError):
+        return False, "the FSD stamp is unreadable"
+    if recorded != fsd_fingerprint(project):
+        return False, "the FSD inputs changed since the last apply"
+    if live_type_missing(project, []):
+        return False, "the typeID is missing from the live tables"
+    return True, "up to date"
 
 
 def turret_groups(project):
@@ -223,8 +275,21 @@ def publish(sink, res_path, local):
     _run(sink, [PY, TOOLS / "install.py", "--publish", res_path, local])
 
 
-def deploy(project, sink, fsd=True, restart_server=False):
-    """Push to the live client, in the only safe order."""
+def deploy(project, sink, fsd="auto", restart_server=False):
+    """Push to the live client, in the only safe order.
+
+    fsd="auto" (the default) touches the client's static tables ONLY when their
+    inputs actually changed. That matters because an apply is a rollback followed
+    by a multi-minute compile: if anything fails in between, the tables are left
+    pristine, the ship's typeID does not exist, and the client dies at character
+    select. A placement change has no business taking that risk, and previously
+    every deploy did.
+    """
+    if fsd == "auto":
+        current, reason = fsd_is_current(project)
+        fsd = not current
+        _log(sink, "FSD %s (%s)"
+             % ("needs applying" if fsd else "unchanged, skipping", reason))
     # Only the FSD apply needs the client closed - it rewrites files the client
     # holds open. Publishing a resource just writes a blob and one index line,
     # which a running client neither reads nor locks (it read the index at
@@ -269,13 +334,25 @@ def deploy(project, sink, fsd=True, restart_server=False):
         try:
             _run(sink, [PY, TOOLS / "fsd_deploy.py", "apply"])
         except RuntimeError as exc:
-            raise RuntimeError(
-                "FSD APPLY FAILED AFTER A SUCCESSFUL ROLLBACK. The client's "
-                "tables are now PRISTINE, so typeID %s does not exist and "
-                "character select will fail with TypeNotFoundException. Fix the "
-                "cause and re-run Deploy, or run `python fsd_deploy.py apply` "
-                "directly. Underlying error: %s"
-                % (project.get("typeID", 900001), exc))
+            # The tables are pristine at this point, which is exactly the state
+            # a fresh apply needs, so one retry is worth attempting before
+            # leaving the client unable to log in.
+            _log(sink, "apply failed (%s) - retrying once, because the tables "
+                       "are now pristine and that is what apply needs" % exc)
+            try:
+                _run(sink, [PY, TOOLS / "fsd_deploy.py", "apply"])
+            except RuntimeError as retry_exc:
+                raise RuntimeError(
+                    "FSD APPLY FAILED TWICE AFTER A SUCCESSFUL ROLLBACK. The "
+                    "client's tables are PRISTINE, so typeID %s does not exist "
+                    "and character select will fail with TypeNotFoundException. "
+                    "Recover with: python fsd_deploy.py apply   (then republish "
+                    "resources). Underlying error: %s"
+                    % (project.get("typeID", 900001), retry_exc))
+        fsd_stamp_path(project).write_text(json.dumps({
+            "fingerprint": fsd_fingerprint(project),
+            "appliedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }, indent=1), "utf-8")
 
     # resources LAST - an apply/rollback rewrites the whole index
     hull_black = TOOLS / "native_out" / ("data-with-%s.black" % project["hullName"])
