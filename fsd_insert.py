@@ -108,6 +108,20 @@ def main():
             # own namespace and publish the rendered set there.
             FsdChange(ChangeOperation.UPDATE, GRAPHIC_ID,
                       path=("iconInfo", "folder"), value=ICON_FOLDER),
+            # SOF faction decides which MATERIALS the _m map's four bands select,
+            # and the two factions do not agree:
+            #   amarrbase    Primary m1 = white_ivory_matt      (bright)
+            #   minmatarbase Primary m1 = black_gunmetal_brushed (black)
+            # The _m map puts ~93% of this hull on band 1, so inheriting
+            # minmatarbase from the Maelstrom graphicID tinted almost the whole
+            # ship black gunmetal - no albedo value can compensate for that.
+            # A Venator is light grey, so it wants the Amarr material set. This
+            # is purely visual; the projectile and shield bonuses come from
+            # typedogma, which is a different table and unaffected.
+            FsdChange(ChangeOperation.UPDATE, GRAPHIC_ID,
+                      path=("sofFactionName",), value="amarrbase"),
+            FsdChange(ChangeOperation.UPDATE, GRAPHIC_ID,
+                      path=("sofRaceName",), value="amarr"),
         ])
     print("graphicID %d <- clone of %d, sofHullName -> venator_t1, icons -> %s"
           % (GRAPHIC_ID, TEMPLATE_GRAPHIC, ICON_FOLDER))

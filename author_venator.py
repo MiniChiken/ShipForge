@@ -176,6 +176,109 @@ def rebuild_turrets(blue, hull, specs, report):
     return len(locs)
 
 
+def normalize(v):
+    length = math.sqrt(sum(c * c for c in v)) or 1.0
+    return [c / length for c in v]
+
+
+def cone_transform(pos, direction, width, length):
+    """Spotlight basis: local Z is the cone axis, its length the cone length.
+
+    Read off stock mb3_t1. Its 'primary' bow lights are a plain diagonal
+    (16, 16, 50) sitting just ahead of the nose, so the cone runs down local +Z;
+    its 'Empire' floodlights carry a rotated row2 of (44.7, 59.7, 8.0) - length
+    75, pointing up and outboard - confirming row2 is the aim direction and its
+    magnitude the reach. Rows 0 and 1 set the cone's cross-section.
+    """
+    nz = normalize(direction)
+    # any axis not parallel to the cone gives a stable cross-section
+    seed = (0.0, 0.0, 1.0) if abs(nz[2]) < 0.9 else (1.0, 0.0, 0.0)
+    nx = normalize([seed[1] * nz[2] - seed[2] * nz[1],
+                    seed[2] * nz[0] - seed[0] * nz[2],
+                    seed[0] * nz[1] - seed[1] * nz[0]])
+    ny = normalize([nz[1] * nx[2] - nz[2] * nx[1],
+                    nz[2] * nx[0] - nz[0] * nx[2],
+                    nz[0] * nx[1] - nz[1] * nx[0]])
+    return ((nx[0] * width, nx[1] * width, nx[2] * width, 0.0),
+            (ny[0] * width, ny[1] * width, ny[2] * width, 0.0),
+            (nz[0] * length, nz[1] * length, nz[2] * length, 0.0),
+            (pos[0], pos[1], pos[2], 1.0))
+
+
+def rebuild_sprite_sets(blue, hull, specs, report):
+    """Replace inherited sprite sets with navigation lights on THIS hull.
+
+    Cloning a donor inherits its sprite sets at ITS coordinates - the Armageddon's
+    sat at points like (-17, 103, 253), which is nowhere on this model.
+    """
+    sets = hull.spriteSets
+    while len(sets):
+        sets.pop()
+    if not specs:
+        return 0
+    group = blue.classes.CreateInstance("trinity.EveSOFDataHullSpriteSet")
+    group.name = "primary"
+    group.skinned = False
+    group.visibilityGroup = "primary"
+    for spec in specs:
+        item = blue.classes.CreateInstance("trinity.EveSOFDataHullSpriteSetItem")
+        item.position = tuple(spec["pos"])
+        item.boneIndex = 0
+        item.colorType = int(spec.get("colorType", 0))
+        item.intensity = float(spec.get("intensity", 1.0))
+        item.saturation = float(spec.get("saturation", 1.0))
+        item.falloff = float(spec.get("falloff", 0.0))
+        item.minScale = float(spec.get("minScale", 5.0))
+        item.maxScale = float(spec.get("maxScale", 14.0))
+        item.blinkRate = float(spec.get("blinkRate", 0.0))
+        item.blinkPhase = float(spec.get("blinkPhase", 0.0))
+        group.items.append(item)
+        report.append({"name": spec.get("name"), "pos": spec["pos"],
+                       "blinkRate": item.blinkRate})
+    sets.append(group)
+    return len(group.items)
+
+
+def rebuild_spotlight_sets(blue, hull, specs, report):
+    """Author spotlight sets. The Armageddon donor has none at all, which is part
+    of why the hull had no light on it."""
+    sets = hull.spotlightSets
+    while len(sets):
+        sets.pop()
+    total = 0
+    for spec in specs:
+        group = blue.classes.CreateInstance("trinity.EveSOFDataHullSpotlightSet")
+        group.name = str(spec["name"])
+        group.skinned = False
+        group.visibilityGroup = "primary"
+        group.zOffset = float(spec.get("zOffset", -0.04))
+        group.coneTextureResPath = spec.get(
+            "coneTexture", "res:/texture/global/spotramp.dds")
+        group.glowTextureResPath = spec.get(
+            "glowTexture", "res:/texture/particle/whitesharp.dds")
+        for item_spec in spec["items"]:
+            item = blue.classes.CreateInstance("trinity.EveSOFDataHullSpotlightSetItem")
+            item.transform = cone_transform(
+                item_spec["pos"], item_spec["direction"],
+                float(item_spec.get("width", 16.0)),
+                float(item_spec.get("length", 50.0)))
+            item.boneIndex = 0
+            item.groupIndex = int(item_spec.get("groupIndex", 0))
+            item.colorType = int(item_spec.get("colorType", 37))
+            item.coneIntensity = float(item_spec.get("coneIntensity", 0.2))
+            item.flareIntensity = float(item_spec.get("flareIntensity", 0.5))
+            item.spriteIntensity = float(item_spec.get("spriteIntensity", 1.0))
+            item.spriteScale = tuple(item_spec.get("spriteScale", (40.0, 80.0, 8.0)))
+            item.saturation = float(item_spec.get("saturation", 1.0))
+            item.boosterGainInfluence = bool(item_spec.get("boosterGainInfluence", False))
+            group.items.append(item)
+            total += 1
+            report.append({"set": group.name, "pos": item_spec["pos"],
+                           "direction": item_spec["direction"]})
+        sets.append(group)
+    return total
+
+
 def hull_summary(hull):
     return {
         "name": safe(getattr(hull, "name", None)),
@@ -189,6 +292,12 @@ def hull_summary(hull):
         "opaqueAreaCount": len(getattr(hull, "opaqueAreas", []) or []),
         "boosterItemCount": len(getattr(getattr(hull, "booster", None), "items", []) or []),
         "turretLocatorCount": len(getattr(hull, "locatorTurrets", []) or []),
+        "spriteSetCount": len(getattr(hull, "spriteSets", []) or []),
+        "spriteItemCount": sum(len(getattr(s, "items", []) or [])
+                               for s in (getattr(hull, "spriteSets", []) or [])),
+        "spotlightSetCount": len(getattr(hull, "spotlightSets", []) or []),
+        "spotlightItemCount": sum(len(getattr(s, "items", []) or [])
+                                  for s in (getattr(hull, "spotlightSets", []) or [])),
         "textures": [
             {"area": safe(getattr(a, "name", None)), "slot": safe(getattr(t, "name", None)),
              "path": safe(getattr(t, "resFilePath", None))}
@@ -230,6 +339,16 @@ def main():
         result["turretLocators"] = rebuild_turrets(
             blue, hull, req.get("turrets", []), turret_report)
         result["turretDetail"] = turret_report
+
+        sprite_report = []
+        result["navLights"] = rebuild_sprite_sets(
+            blue, hull, req.get("navLights", []), sprite_report)
+        result["navLightDetail"] = sprite_report
+
+        spotlight_report = []
+        result["spotlights"] = rebuild_spotlight_sets(
+            blue, hull, req.get("spotlights", []), spotlight_report)
+        result["spotlightDetail"] = spotlight_report
 
         if hasattr(hull, "Validate"):
             result["validation"] = safe(hull.Validate())

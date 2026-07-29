@@ -1,9 +1,20 @@
-# Adding a genuinely new ship to EVE Offline (EVE V24.01)
+# ShipForge — adding a genuinely new ship to EVE Offline (EVE V24.01)
 
-Putting a Star Wars Venator-class Star Destroyer into the EVE client running against a
-local [EvEJS](https://github.com/rrfarmer/EveOffline) server — as a **new ship**, not a
+Tooling for putting a custom ship into the EVE client running against a local
+[EvEJS](https://github.com/rrfarmer/EveOffline) server — as a **new ship**, not a
 reskin. New typeID, new graphicID, new hull definition, its own geometry, textures,
 name, description, icon and locators. **Nothing existing is overwritten.**
+
+Two halves:
+
+* **`shipforge/`** — a local editor ([section 8](#8-shipforge--the-setup-editor)) for
+  placing shield volume, turret hardpoints, boosters and lights against the model,
+  previewing the result in EVE's own renderer, and building/deploying it.
+* **everything else** — the format readers and writers, authoring workers and deploy
+  scripts the editor drives, documented below. They also work standalone.
+
+The reference ship is a Star Wars Venator-class Star Destroyer, but nothing here is
+specific to it beyond the example project.
 
 **Status: working in-client.** typeID `900001`, graphicID `900001`, SOF hull
 `venator_t1`. Flyable, fittable, named, with its own stats.
@@ -239,6 +250,31 @@ hull. Pick the donor for the *bonuses and race* you want, then patch slots and s
 on top. The Venator clones the **Maelstrom** (Minmatar, large projectile damage +
 shield boost) and overrides layout and tank.
 
+**But a graphicID clone also brings its SOF FACTION, and the faction decides which
+materials the `_m` map selects.** This is a trap worth stating plainly, because it
+looks exactly like a texture problem and is not one. Each faction supplies four
+`Primary` area materials:
+
+| slot | amarrbase | minmatarbase |
+|---|---|---|
+| material1 | `white_ivory_matt` | `black_gunmetal_brushed` |
+| material2 | `grey_steel_brushed` | `grey_darksteel_brushed` |
+| material3 | `black_gunmetal_metallic` | `blue_bluedsteel_metallic` |
+| material4 | `gold_true_polished` | `brown_rust_matt` |
+
+The Venator's `_m` map puts ~93% of the hull on band 1. Tuned under the Armageddon's
+graphicID that band was `white_ivory_matt`; switching the donor to the Maelstrom
+silently made it `black_gunmetal_brushed`, and the whole ship rendered as black
+gunmetal. Raising the albedo from mean 131 to the stock 199 barely moved it, because
+the tint, not the texture, was the problem.
+
+So: **choose the donor for its dogma, then set `sofFactionName` for the look you
+want.** They are independent - `sofFactionName` / `sofRaceName` are fields on the
+graphicID record, and the bonuses live in `typedogma`. The Venator ships
+`amarrbase` / `amarr` for a light grey hull with Minmatar projectile bonuses.
+`faction.materialUsageMtl1..4` additionally permutes the bands per faction
+(amarrbase `2,1,0,3`, minmatarbase `0,1,2,3`).
+
 ### 5.2 Icons
 
 Icons resolve as **`graphicids[gid].iconInfo.folder` + `/<graphicID>_<size>`**, e.g.
@@ -312,44 +348,87 @@ is the pristine baseline the change sets are built against.
 
 ---
 
-## 8. ShipForge — the setup editor (in progress, not yet usable)
+## 8. ShipForge — the setup editor
 
-Everything above was tuned by hand: guess a number, rebuild the hull, redeploy, look at
-it in game, repeat. Each loop costs a full client restart. ShipForge exists to collapse
-that to one pass, and to make the *next* ship cheap.
+Everything above was originally tuned by hand: guess a number, rebuild the hull,
+redeploy, restart the client, look at it in game, repeat. ShipForge collapses that to
+one pass, and makes the *next* ship cheap.
 
-**A standalone local web app**, Python-stdlib backend (no new dependencies) serving a
-single-page UI, shelling out to the tools documented above.
+```bash
+python shipforge/server.py --open        # http://127.0.0.1:8770
+python shipforge/seed_venator.py         # seed a project from an existing build
+```
 
-Planned workflow:
+Standard library only, nothing to install. Long steps (a Blender probe, authoring
+inside the client, a deploy) run as background jobs whose log the UI tails.
 
-1. **Import** a model (OBJ/GLB/FBX/blend). The backend probes it in Blender and returns
-   geometry, materials and measured extents.
-2. **Place** locators against the visible model. Three orthographic views
-   (top / side / front) with draggable handles — turret X/Z from the top view, Y from
-   the side — alongside editable numeric fields, because exact values matter as much as
-   eyeballing.
+### Workflow
+
+1. **Import** a model (blend/OBJ/GLB/FBX/STL/DAE). `blender_probe.py` returns the
+   vertices, measured extents, materials, emissive nozzle discs, silhouette anchors,
+   an enclosing-ellipsoid fit, and a height+normal field over the XZ plane.
+2. **Place** locators in three orthographic views (top / side / front). Turret X/Z
+   comes from the top view, Y from the side. Wheel zooms about the cursor,
+   middle-drag pans, double-click resets a panel. Ctrl+click toggles, Shift+click
+   extends, dragging empty space box-selects, and dragging any selected handle
+   **moves the whole group by one delta**, so relative spacing is preserved exactly.
+   Numeric fields sit alongside, because exact values matter as much as eyeballing.
 3. **Assist** with the measurements that are easy to get wrong:
-   * snap a turret to the hull surface by raycast, and flag mounts with no hull under them
+   * snap to the hull surface, and flag locators with no hull beneath them
    * auto-detect engine nozzles by material **and aft-facing normal**
-   * fit the shield ellipsoid with the inflation factor that actually encloses the hull
-4. **Build** — geometry export, `.gr2`, native `.black` authoring.
-5. **Deploy** — FSD apply, publish, server patch, restart, in the correct order, with a
-   warning if you are undocked.
-6. **Verify** — runs the probes above automatically after every deploy and shows a
-   pass/fail against the intended values, rather than reporting success because a
-   command exited 0.
+   * fit the shield ellipsoid with the inflation that actually encloses the hull
+4. **Preview in Trinity** - render the authored hull through the client's own
+   renderer, with real turret hardpoint mounting and boosters. See 8.1.
+5. **Build** - native `.black` authoring via the workers above.
+6. **Deploy** - FSD apply then publish, in that order, server restart opt-in.
+7. **Verify** - reads the hull back out of the *published* `data.black` and reports
+   pass/fail per field, rather than trusting that a command exited 0.
 
-Constraints it enforces by construction, so they cannot drift:
+### Snapping uses an exact raycast, not the height field
+
+The probe's field has ~4m cells. Fine for live feedback, wrong to snap with: on a
+stepped hull the nearest cell can sit on the deck beside the pocket a locator belongs
+in. Measured on the Venator, grid samples disagreed with an exact raycast at the same
+coordinates by **4 to 9 metres**. So `blender_snap.py` raycasts the real geometry at
+the real coordinates, and the field is display-only.
+
+### Constraints it enforces by construction
+
+So they cannot drift, each having cost a debugging cycle:
 
 * `hiSlots` == number of turret locator groups
 * turret groups are the digits; `a`/`b` are port/starboard positions of one hardpoint
 * locator rows are (localX, localY, localZ), localY = mount normal, localX = Y x Z
-* booster plume Z:XY ~= 14, `lightScale` 1.0
-* ellipsoid radii inflated until every vertex is inside, origin-centred
+* booster plume Z:XY ~= 14 (warns outside 8-20), `lightScale` 1.0
+* shield radii never smaller than the hull's half-extents
 * resource publishes strictly **after** the FSD apply
+* refuses to deploy while the client is running; leaves the server alone by default
 
-`Build` and `Deploy` stay separate actions even though both live in the tool.
+`Build`, `Preview` and `Deploy` stay separate actions.
+
+### 8.1 Trinity preview
+
+[Elysian Jessica - Trinity Viewer](https://github.com/JohnElysian/Eve-Online-Trinity-Viewer)
+(MIT) renders EVE assets through the installed client's native Blue/Trinity stack. Its
+entry point takes a SOF DNA directly:
+
+```
+trinity_live_viewer.py TYPE_ID DNA RADIUS WIDTH HEIGHT [MODE] [CATALOG_JSON] [COMMAND_JSONL]
+```
+
+so a hull can be previewed with no catalogue entry for it. DNA is
+`<hull>:<faction>:<race>`, e.g. `venator_t1:amarrbase:amarr`. ShipForge launches it
+through `exefile.exe /py`, the same mechanism as the authoring workers.
+
+Clone the viewer to `C:\evejs\tools\trinity-viewer`, or set `SHIPFORGE_VIEWER`.
+
+Two things worth knowing. Trinity resolves a hull through the client's resource
+system, so Preview **publishes `data.black`** - that one resource and nothing else: no
+FSD tables, no server, no type or dogma change, and `install.py` keeps its index
+backup. And because the DNA is passed directly, a hull can be previewed under a
+*different faction* than its graphicID currently names - which is how the
+`minmatarbase` -> `amarrbase` material problem in section 5.1 can be confirmed before
+deploying it.
 
 ---
 
@@ -415,6 +494,14 @@ the wall was never technical.
 | `probe_hull.py` / `probe_template.py` / `verify_fsd.py` / `diff_hull.py` | verification |
 | `py27c.cpp` / `py27shim.cpp` | Python 2.7 compiler and interpreter shim |
 | `peek_pyj.py` / `decompile_pyj.py` | inspect client `.pyj` modules |
+| `probe_lights.py` / `probe_faction.py` | SOF lighting sets, faction material slots |
+| `measure_lights.py` / `fix_brightness.py` / `make_glow_map.py` | light anchors, texture levels, emissive atlas |
+| `shipforge/server.py` | the editor's stdlib HTTP server and job runner |
+| `shipforge/static/index.html` | the editor UI (three orthographic views) |
+| `shipforge/pipeline.py` | build / preview / deploy / verify orchestration |
+| `shipforge/blender_probe.py` | one-pass model probe: geometry, surface field, nozzles, anchors |
+| `shipforge/blender_snap.py` | exact surface raycast for snapping |
+| `shipforge/seed_venator.py` | seed a project from an existing build |
 
 ---
 

@@ -1,0 +1,868 @@
+<meta charset="utf-8">
+<title>ShipForge</title>
+<style>
+  :root{
+    --bg:#14171a; --panel:#1c2024; --panel2:#23282d; --line:#31383f;
+    --ink:#d7dde3; --dim:#8b959f; --accent:#e0a94a; --ok:#5fb87a; --bad:#d4675a;
+    --sel:#4aa3e0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:13px/1.45 "Segoe UI",system-ui,sans-serif}
+  header{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+         padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+  header h1{font-size:14px;margin:0 12px 0 0;letter-spacing:.08em;
+            text-transform:uppercase;color:var(--accent);font-weight:600}
+  input,select,button{background:var(--panel2);color:var(--ink);
+       border:1px solid var(--line);border-radius:3px;padding:4px 7px;font:inherit}
+  input[type=number]{width:82px}
+  button{cursor:pointer}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:#3a2f18;border-color:var(--accent);color:#f0d9a8}
+  button.danger{background:#3a201d;border-color:#7a3a32}
+  #wrap{display:grid;grid-template-columns:1fr 360px;gap:10px;padding:10px;
+        height:calc(100vh - 47px)}
+  #views{display:grid;grid-template-rows:1fr 1fr 1fr;gap:8px;min-height:0}
+  .view{position:relative;background:var(--panel);border:1px solid var(--line);
+        border-radius:4px;overflow:hidden;min-height:0}
+  .view canvas{display:block;width:100%;height:100%;cursor:crosshair}
+  .view .tag{position:absolute;top:5px;left:8px;font-size:11px;color:var(--dim);
+             pointer-events:none;letter-spacing:.06em;text-transform:uppercase}
+  .view .hint{position:absolute;bottom:5px;left:8px;font-size:11px;
+              color:var(--dim);pointer-events:none}
+  aside{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:4px;
+        padding:9px 10px}
+  .card h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--dim);margin:0 0 7px}
+  .row{display:flex;gap:6px;align-items:center;margin-bottom:5px;flex-wrap:wrap}
+  .row label{color:var(--dim);min-width:64px}
+  ul.items{list-style:none;margin:0;padding:0;max-height:180px;overflow:auto}
+  ul.items li{display:flex;gap:6px;align-items:center;padding:3px 5px;
+              border-radius:3px;cursor:pointer;font-variant-numeric:tabular-nums}
+  ul.items li:hover{background:var(--panel2)}
+  ul.items li.sel{background:#25313b;outline:1px solid var(--sel)}
+  ul.items li.sel.primary{outline:1px solid #fff}
+  ul.items li .nm{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  ul.items li .warn{color:var(--bad)}
+  #log{flex:1;min-height:120px;background:#0f1214;border:1px solid var(--line);
+       border-radius:4px;padding:7px 9px;overflow:auto;white-space:pre-wrap;
+       font:11px/1.4 Consolas,monospace;color:#9fb0bd}
+  .pill{font-size:11px;padding:1px 6px;border-radius:9px;border:1px solid var(--line)}
+  .pill.ok{color:var(--ok);border-color:#2f5c3f}
+  .pill.bad{color:var(--bad);border-color:#6d332c}
+  .problems{color:#e8c07a;font-size:12px;margin:4px 0 0}
+  .problems div{margin:2px 0}
+</style>
+
+<header>
+  <h1>ShipForge</h1>
+  <select id="project"></select>
+  <input id="newName" placeholder="new project" size="10">
+  <button id="create">Create</button>
+  <span style="flex:1"></span>
+  <span id="clientState" class="pill">client ?</span>
+  <button id="save">Save</button>
+  <button id="build" class="primary">Build hull</button>
+  <button id="preview" class="primary">Preview in Trinity</button>
+  <button id="deploy" class="danger">Deploy</button>
+  <button id="verify">Verify live</button>
+</header>
+
+<div id="wrap">
+  <div id="views">
+    <div class="view"><canvas id="c_top"></canvas>
+      <div class="tag">Top &mdash; X right, bow up</div>
+      <div class="hint">drag handles to set X / Z</div></div>
+    <div class="view"><canvas id="c_side"></canvas>
+      <div class="tag">Side &mdash; bow right, up is +Y</div>
+      <div class="hint">drag to set Z / Y</div></div>
+    <div class="view"><canvas id="c_front"></canvas>
+      <div class="tag">Front &mdash; X right, up is +Y</div>
+      <div class="hint">drag to set X / Y</div></div>
+  </div>
+
+  <aside>
+    <div class="card">
+      <h2>Model</h2>
+      <div class="row"><label>file</label>
+        <input id="model" style="flex:1" placeholder="C:\path\to\ship.blend"></div>
+      <div class="row"><label>length m</label><input id="targetLength" type="number" step="1">
+        <button id="import">Import / probe</button></div>
+      <div id="modelInfo" style="color:var(--dim);font-size:12px"></div>
+    </div>
+
+    <div class="card">
+      <h2>Shield volume</h2>
+      <div class="row"><label>centre</label>
+        <input id="sc0" type="number" step="1"><input id="sc1" type="number" step="1">
+        <input id="sc2" type="number" step="1"></div>
+      <div class="row"><label>radius</label>
+        <input id="sr0" type="number" step="1"><input id="sr1" type="number" step="1">
+        <input id="sr2" type="number" step="1"></div>
+      <div class="row"><label>sphere</label><input id="ssph" type="number" step="1">
+        <button id="fitShield">Fit to hull</button></div>
+      <div style="color:var(--dim);font-size:11px">Half-extents alone do not
+        enclose a hull &mdash; Fit inflates until every vertex is inside.</div>
+    </div>
+
+    <div class="card">
+      <h2>Turrets <span id="groupInfo" class="pill"></span></h2>
+      <ul class="items" id="turretList"></ul>
+      <div class="row">
+        <button id="addTurret">Add pair</button>
+        <button id="snapTurrets">Snap all to hull</button>
+        <button id="delTurret">Delete</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Boosters</h2>
+      <ul class="items" id="boosterList"></ul>
+      <div class="row">
+        <button id="autoBoosters">Auto-detect nozzles</button>
+        <button id="delBooster">Delete</button>
+      </div>
+      <div class="row"><label>plume ratio</label>
+        <input id="plume" type="number" step="0.5" value="14">
+        <button id="applyPlume">Apply</button></div>
+    </div>
+
+    <div class="card">
+      <h2>Lights</h2>
+      <ul class="items" id="lightList"></ul>
+      <div class="row">
+        <button id="autoNav">Nav lights from anchors</button>
+        <button id="delLight">Delete</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Selected <span id="selCount" class="pill">nothing selected</span></h2>
+      <div class="row"><label>name</label><input id="selName" style="flex:1"></div>
+      <div class="row"><label>pos</label>
+        <input id="sp0" type="number" step="0.5"><input id="sp1" type="number" step="0.5">
+        <input id="sp2" type="number" step="0.5"></div>
+      <div class="row"><label>normal</label>
+        <input id="sn0" type="number" step="0.01"><input id="sn1" type="number" step="0.01">
+        <input id="sn2" type="number" step="0.01"></div>
+      <div class="row"><button id="snapOne">Snap selected to hull</button></div>
+      <div class="row"><label>nudge all</label>
+        <select id="nudgeAxis">
+          <option value="0">X</option><option value="1" selected>Y</option>
+          <option value="2">Z</option>
+        </select>
+        <input id="nudgeBy" type="number" step="0.5" value="-1">
+        <button id="nudge">Apply</button></div>
+      <div class="row"><span id="selSurface"
+           style="color:var(--dim);font-size:11px"></span></div>
+      <div style="color:var(--dim);font-size:11px">
+        Ctrl+click toggles, Shift+click extends, drag empty space to box-select.
+        Dragging any selected handle moves the whole group and keeps the spacing.
+        Wheel zooms, middle-drag pans, double-click resets a panel.
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Checks</h2>
+      <div id="problems" class="problems">&mdash;</div>
+    </div>
+
+    <div id="log">ready</div>
+  </aside>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let project = null, probe = null;
+// Multi-selection. `selection` is every picked handle; `primary` is the one the
+// inspector edits. Dragging moves the whole selection by a single delta, so the
+// relative distances between picked items are preserved exactly.
+let selection = [], primary = null;
+let drag = null;           // {view, startWorld, origins:[[x,y,z],...]}
+let band = null;           // rubber-band box while sweeping empty space
+
+const key = s => s.kind + ':' + s.index;
+const isSelected = s => selection.some(o => key(o) === key(s));
+function setSelection(list, keepPrimary){
+  selection = [];
+  const seen = new Set();
+  list.forEach(s => { if(!seen.has(key(s))){ seen.add(key(s)); selection.push(s); } });
+  if(!keepPrimary || !selection.some(o => primary && key(o) === key(primary)))
+    primary = selection.length ? selection[selection.length-1] : null;
+}
+function toggleSelection(s){
+  const k = key(s);
+  const at = selection.findIndex(o => key(o) === k);
+  if(at >= 0){
+    selection.splice(at, 1);
+    if(primary && key(primary) === k) primary = selection[selection.length-1] || null;
+  } else { selection.push(s); primary = s; }
+}
+
+const VIEWS = [
+  {id:'top',   h:'x', hs: 1, v:'z', vs:-1},   // bow up  -> +Z toward screen top
+  {id:'side',  h:'z', hs: 1, v:'y', vs:-1},   // bow right, +Y up
+  {id:'front', h:'x', hs: 1, v:'y', vs:-1},
+];
+// each panel has its own camera: wheel zooms about the cursor, middle-drag pans
+VIEWS.forEach(v => v.cam = {zoom:1, panX:0, panY:0});
+const AXIS = {x:0, y:1, z:2};
+
+function log(msg){
+  const el = $('log');
+  el.textContent += (el.textContent ? '\n' : '') + msg;
+  el.scrollTop = el.scrollHeight;
+}
+
+// ---------------------------------------------------------------- fetching
+async function getJSON(url, opts){
+  const r = await fetch(url, opts);
+  if(!r.ok) throw new Error(url + ' -> ' + r.status);
+  return r.json();
+}
+async function post(url, body){
+  return getJSON(url, {method:'POST', headers:{'Content-Type':'application/json'},
+                       body:JSON.stringify(body||{})});
+}
+async function pollJob(id, label){
+  let seen = 0;
+  for(;;){
+    const j = await getJSON('/api/job/' + id);
+    for(; seen < j.log.length; seen++) log(j.log[seen]);
+    if(j.state !== 'running'){
+      log('[' + label + '] ' + j.state);
+      return j;
+    }
+    await new Promise(r => setTimeout(r, 600));
+  }
+}
+
+// ------------------------------------------------------------ projections
+function viewScale(view, canvas){
+  const cam = view.cam;
+  if(!probe) return {k:cam.zoom, ox:canvas.width/2 + cam.panX,
+                     oy:canvas.height/2 + cam.panY, baseK:1};
+  const half = probe.bounds.half;
+  const hw = half[AXIS[view.h]] || 1, vh = half[AXIS[view.v]] || 1;
+  const pad = 18;
+  const baseK = Math.min((canvas.width - pad*2)/(hw*2),
+                         (canvas.height - pad*2)/(vh*2));
+  return {k:baseK * cam.zoom, ox:canvas.width/2 + cam.panX,
+          oy:canvas.height/2 + cam.panY, baseK};
+}
+function toScreen(view, s, pos){
+  return [s.ox + view.hs * pos[AXIS[view.h]] * s.k,
+          s.oy + view.vs * pos[AXIS[view.v]] * s.k];
+}
+function fromScreen(view, s, sx, sy){
+  return {axisH:AXIS[view.h], valH:(sx - s.ox)/(view.hs*s.k),
+          axisV:AXIS[view.v], valV:(sy - s.oy)/(view.vs*s.k)};
+}
+
+// ------------------------------------------------------- surface sampling
+function sampleSurface(x, z){
+  if(!probe || !probe.surface) return null;
+  const S = probe.surface;
+  const xi = nearest(S.xs, x), zi = nearest(S.zs, z);
+  if(xi < 0 || zi < 0) return null;
+  const idx = zi*S.gridX + xi;
+  const h = S.height[idx];
+  if(h === null || h === undefined) return null;
+  return {y:h, normal:[S.normals[idx*3], S.normals[idx*3+1], S.normals[idx*3+2]]};
+}
+function nearest(arr, v){
+  if(!arr || !arr.length) return -1;
+  let best = 0, bd = Infinity;
+  for(let i=0;i<arr.length;i++){ const d = Math.abs(arr[i]-v); if(d<bd){bd=d;best=i;} }
+  return best;
+}
+
+// ----------------------------------------------------------------- drawing
+function collections(){
+  if(!project) return [];
+  return [
+    {kind:'turrets',  list:project.turrets  || [], color:'#4aa3e0', r:5},
+    {kind:'boosters', list:project.boosters || [], color:'#e0a94a', r:6},
+    {kind:'navLights',list:project.navLights|| [], color:'#5fb87a', r:4},
+  ];
+}
+
+function draw(){
+  VIEWS.forEach(view => {
+    const canvas = $('c_' + view.id);
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = Math.max(50, rect.width);
+    canvas.height = Math.max(50, rect.height);
+    const g = canvas.getContext('2d');
+    g.clearRect(0,0,canvas.width,canvas.height);
+    if(!probe){
+      g.fillStyle = '#5d666e'; g.font = '12px sans-serif';
+      g.fillText('import a model to begin', 14, 24);
+      return;
+    }
+    const s = viewScale(view, canvas);
+
+    // axes
+    g.strokeStyle = '#2a3138'; g.lineWidth = 1;
+    g.beginPath();
+    g.moveTo(0, s.oy); g.lineTo(canvas.width, s.oy);
+    g.moveTo(s.ox, 0); g.lineTo(s.ox, canvas.height);
+    g.stroke();
+
+    // hull points
+    const P = probe.points;
+    g.fillStyle = 'rgba(150,168,182,0.5)';
+    for(let i=0;i<P.length;i+=3){
+      const p = [P[i], P[i+1], P[i+2]];
+      const [sx, sy] = toScreen(view, s, p);
+      g.fillRect(sx, sy, 1, 1);
+    }
+
+    // shield ellipse
+    if(project && project.shield){
+      const c = project.shield.centre, r = project.shield.radius;
+      const [cx, cy] = toScreen(view, s, c);
+      g.strokeStyle = 'rgba(74,163,224,0.55)';
+      g.setLineDash([4,3]); g.lineWidth = 1.2;
+      g.beginPath();
+      g.ellipse(cx, cy, r[AXIS[view.h]]*s.k, r[AXIS[view.v]]*s.k, 0, 0, Math.PI*2);
+      g.stroke(); g.setLineDash([]);
+    }
+
+    // handles
+    collections().forEach(col => {
+      col.list.forEach((item, index) => {
+        const [sx, sy] = toScreen(view, s, item.pos);
+        const ref = {kind:col.kind, index};
+        const isSel = isSelected(ref);
+        const isPrimary = primary && key(primary) === key(ref);
+        g.beginPath(); g.arc(sx, sy, isSel ? col.r+2.5 : col.r, 0, Math.PI*2);
+        g.fillStyle = isSel ? '#ffffff' : col.color;
+        g.fill();
+        if(isSel){
+          g.strokeStyle = isPrimary ? '#ffffff' : col.color;
+          g.lineWidth = isPrimary ? 2.5 : 2;
+          g.stroke();
+        }
+        // normal / aim direction
+        if(item.normal){
+          const tip = item.pos.map((v,i)=> v + item.normal[i]*28);
+          const [tx, ty] = toScreen(view, s, tip);
+          g.strokeStyle = isSel ? '#ffffff' : col.color; g.lineWidth = 1.4;
+          g.beginPath(); g.moveTo(sx, sy); g.lineTo(tx, ty); g.stroke();
+        }
+      });
+    });
+
+    // link selected handles so a group reads as one rigid body
+    if(selection.length > 1){
+      g.strokeStyle = 'rgba(255,255,255,0.22)'; g.lineWidth = 1;
+      g.setLineDash([3,3]); g.beginPath();
+      selection.forEach((ref, n) => {
+        const item = itemOf(ref); if(!item) return;
+        const [hx, hy] = toScreen(view, s, item.pos);
+        if(n === 0) g.moveTo(hx, hy); else g.lineTo(hx, hy);
+      });
+      g.stroke(); g.setLineDash([]);
+    }
+
+    // rubber band
+    if(band && band.view === view.id){
+      g.strokeStyle = 'rgba(74,163,224,0.9)'; g.lineWidth = 1;
+      g.fillStyle = 'rgba(74,163,224,0.12)';
+      const x = Math.min(band.x0, band.x1), y = Math.min(band.y0, band.y1);
+      const w = Math.abs(band.x1-band.x0), h = Math.abs(band.y1-band.y0);
+      g.fillRect(x, y, w, h); g.strokeRect(x, y, w, h);
+    }
+  });
+}
+
+// ------------------------------------------------------------ interaction
+function hitTest(view, canvas, sx, sy){
+  const s = viewScale(view, canvas);
+  let best = null, bd = 12;
+  collections().forEach(col => col.list.forEach((item, index) => {
+    const [hx, hy] = toScreen(view, s, item.pos);
+    const d = Math.hypot(hx-sx, hy-sy);
+    if(d < bd){ bd = d; best = {kind:col.kind, index}; }
+  }));
+  return best;
+}
+
+function inBand(view, canvas, b){
+  const s = viewScale(view, canvas);
+  const x0 = Math.min(b.x0,b.x1), x1 = Math.max(b.x0,b.x1);
+  const y0 = Math.min(b.y0,b.y1), y1 = Math.max(b.y0,b.y1);
+  const out = [];
+  collections().forEach(col => col.list.forEach((item, index) => {
+    const [hx, hy] = toScreen(view, s, item.pos);
+    if(hx >= x0 && hx <= x1 && hy >= y0 && hy <= y1)
+      out.push({kind:col.kind, index});
+  }));
+  return out;
+}
+
+let panning = null;
+
+VIEWS.forEach(view => {
+  const canvas = $('c_' + view.id);
+
+  canvas.addEventListener('contextmenu', ev => ev.preventDefault());
+  canvas.addEventListener('auxclick', ev => { if(ev.button === 1) ev.preventDefault(); });
+
+  canvas.addEventListener('mousedown', ev => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+
+    if(ev.button === 1){                      // middle: pan this panel
+      ev.preventDefault();
+      panning = {view, x:ev.clientX, y:ev.clientY};
+      canvas.style.cursor = 'grabbing';
+      return;
+    }
+    if(ev.button !== 0) return;
+
+    const hit = hitTest(view, canvas, sx, sy);
+    if(hit){
+      if(ev.ctrlKey || ev.metaKey) toggleSelection(hit);
+      else if(ev.shiftKey) setSelection(selection.concat([hit]), true);
+      else if(!isSelected(hit)) setSelection([hit]);
+      else primary = hit;                     // already in the group: keep it, drag all
+
+      // Record every selected item's ORIGINAL position and the world point the
+      // drag began at. Moving by a single delta is what preserves the relative
+      // distances inside the group.
+      const s = viewScale(view, canvas);
+      const m = fromScreen(view, s, sx, sy);
+      drag = {view, axisH:m.axisH, axisV:m.axisV,
+              startH:m.valH, startV:m.valV,
+              origins:selection.map(ref => {
+                const it = itemOf(ref);
+                return it ? it.pos.slice() : null;
+              })};
+      refreshSelected(); renderLists(); draw();
+    } else {
+      band = {view:view.id, x0:sx, y0:sy, x1:sx, y1:sy,
+              additive:ev.shiftKey || ev.ctrlKey || ev.metaKey};
+    }
+  });
+
+  canvas.addEventListener('mousemove', ev => {
+    const rect = canvas.getBoundingClientRect();
+    const sx = ev.clientX - rect.left, sy = ev.clientY - rect.top;
+
+    if(band && band.view === view.id){
+      band.x1 = sx; band.y1 = sy; draw(); return;
+    }
+    if(!drag || drag.view !== view) return;
+
+    const s = viewScale(view, canvas);
+    const m = fromScreen(view, s, sx, sy);
+    const dH = m.valH - drag.startH, dV = m.valV - drag.startV;
+    selection.forEach((ref, n) => {
+      const item = itemOf(ref), origin = drag.origins[n];
+      if(!item || !origin) return;
+      item.pos = origin.slice();
+      item.pos[drag.axisH] = Math.round((origin[drag.axisH] + dH)*100)/100;
+      item.pos[drag.axisV] = Math.round((origin[drag.axisV] + dV)*100)/100;
+    });
+    refreshSelected(); draw();
+  });
+
+  canvas.addEventListener('wheel', ev => {
+    ev.preventDefault();
+    const rect = canvas.getBoundingClientRect();
+    const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+    const before = viewScale(view, canvas);
+    // world point under the cursor, so zoom keeps it pinned there
+    const wh = (mx - before.ox)/(view.hs*before.k);
+    const wv = (my - before.oy)/(view.vs*before.k);
+    const factor = Math.exp(-ev.deltaY * 0.0016);
+    view.cam.zoom = Math.min(60, Math.max(0.2, view.cam.zoom * factor));
+    const after = viewScale(view, canvas);
+    view.cam.panX += mx - (after.ox + view.hs*wh*after.k);
+    view.cam.panY += my - (after.oy + view.vs*wv*after.k);
+    draw();
+  }, {passive:false});
+
+  canvas.addEventListener('dblclick', () => {
+    view.cam.zoom = 1; view.cam.panX = 0; view.cam.panY = 0;
+    log('reset ' + view.id + ' view'); draw();
+  });
+});
+
+window.addEventListener('mousemove', ev => {
+  if(!panning) return;
+  panning.view.cam.panX += ev.clientX - panning.x;
+  panning.view.cam.panY += ev.clientY - panning.y;
+  panning.x = ev.clientX; panning.y = ev.clientY;
+  draw();
+});
+
+window.addEventListener('mouseup', () => {
+  if(panning){
+    $('c_' + panning.view.id).style.cursor = 'crosshair';
+    panning = null;
+  }
+  if(band){
+    const view = VIEWS.find(v => v.id === band.view);
+    const canvas = $('c_' + band.view);
+    const dragged = Math.hypot(band.x1-band.x0, band.y1-band.y0) > 4;
+    if(dragged){
+      const found = inBand(view, canvas, band);
+      setSelection(band.additive ? selection.concat(found) : found);
+      log('selected ' + selection.length + ' item(s)');
+    } else if(!band.additive){
+      setSelection([]);
+    }
+    band = null;
+    refreshSelected(); renderLists(); draw();
+  }
+  drag = null;
+});
+
+function itemOf(s){
+  if(!s || !project) return null;
+  const list = project[s.kind];
+  return list ? list[s.index] : null;
+}
+
+// ----------------------------------------------------------------- lists
+function renderLists(){
+  const mk = (elId, kind, fmt) => {
+    const el = $(elId); el.innerHTML = '';
+    (project[kind] || []).forEach((item, index) => {
+      const ref = {kind, index};
+      const li = document.createElement('li');
+      if(isSelected(ref))
+        li.className = 'sel' + (primary && key(primary) === key(ref) ? ' primary' : '');
+      const surf = sampleSurface(item.pos[0], item.pos[2]);
+      const off = surf ? Math.abs(item.pos[1] - surf.y) : null;
+      const warn = (kind === 'turrets') &&
+                   (surf === null || (off !== null && off > 3));
+      li.innerHTML = '<span class="nm">' + fmt(item, index) + '</span>' +
+        (warn ? '<span class="warn" title="grid says this is off the hull; ' +
+                'Snap for an exact answer">&#9888;</span>' : '');
+      li.onclick = ev => {
+        if(ev.ctrlKey || ev.metaKey) toggleSelection(ref);
+        else if(ev.shiftKey && primary && primary.kind === kind){
+          const a = Math.min(primary.index, index), b = Math.max(primary.index, index);
+          const run = [];
+          for(let i=a;i<=b;i++) run.push({kind, index:i});
+          setSelection(selection.concat(run), true);
+        } else setSelection([ref]);
+        refreshSelected(); renderLists(); draw();
+      };
+      el.appendChild(li);
+    });
+  };
+  const p3 = v => '[' + v.map(n => n.toFixed(1)).join(', ') + ']';
+  mk('turretList', 'turrets', it => (it.name || '?') + '  ' + p3(it.pos));
+  mk('boosterList', 'boosters', (it, i) =>
+      '#' + (i+1) + '  ' + p3(it.pos) + '  r' + (it.scale ? it.scale[0].toFixed(1) : '?'));
+  mk('lightList', 'navLights', it => (it.name || 'light') + '  ' + p3(it.pos));
+
+  const groups = new Set();
+  (project.turrets||[]).forEach(t => {
+    const d = (t.name||'').replace(/\D/g,''); if(d) groups.add(d);
+  });
+  const hi = (project.dogma||{}).hiSlots;
+  const gi = $('groupInfo');
+  gi.textContent = groups.size + ' groups / hiSlots ' + (hi ?? '-');
+  gi.className = 'pill ' + (hi === groups.size ? 'ok' : 'bad');
+}
+
+function refreshSelected(){
+  const item = itemOf(primary);
+  $('selName').value = item && item.name ? item.name : '';
+  ['sp0','sp1','sp2'].forEach((id,i) => $(id).value = item ? item.pos[i] : '');
+  ['sn0','sn1','sn2'].forEach((id,i) =>
+      $(id).value = item && item.normal ? item.normal[i] : '');
+  $('selCount').textContent = selection.length > 1
+    ? selection.length + ' selected — drag moves them as a group'
+    : (selection.length ? '1 selected' : 'nothing selected');
+  const info = $('selSurface');
+  if(item){
+    const surf = sampleSurface(item.pos[0], item.pos[2]);
+    info.textContent = surf
+      ? 'grid hull Y here ' + surf.y.toFixed(2) + ' (offset ' +
+        (item.pos[1]-surf.y).toFixed(2) + ') — Snap for exact'
+      : 'grid finds no hull under this point';
+    info.style.color = surf ? 'var(--dim)' : 'var(--bad)';
+  } else info.textContent = '';
+}
+
+// Typed edits apply to the PRIMARY item only; group moves are done by dragging,
+// where a single delta keeps the relative spacing intact.
+['sp0','sp1','sp2'].forEach((id,i) => $(id).oninput = () => {
+  const item = itemOf(primary); if(!item) return;
+  item.pos[i] = parseFloat($(id).value) || 0; renderLists(); draw(); refreshSelected();
+});
+['sn0','sn1','sn2'].forEach((id,i) => $(id).oninput = () => {
+  const item = itemOf(primary); if(!item) return;
+  item.normal = item.normal || [0,1,0];
+  item.normal[i] = parseFloat($(id).value) || 0; draw();
+});
+$('selName').oninput = () => {
+  const item = itemOf(primary); if(!item) return;
+  item.name = $('selName').value; renderLists();
+};
+
+// Nudge the whole selection, for when dragging is not precise enough.
+$('nudge').onclick = () => {
+  const axis = parseInt($('nudgeAxis').value, 10);
+  const by = parseFloat($('nudgeBy').value) || 0;
+  if(!selection.length){ log('nothing selected to nudge'); return; }
+  selection.forEach(ref => {
+    const item = itemOf(ref); if(!item) return;
+    item.pos[axis] = Math.round((item.pos[axis] + by)*100)/100;
+  });
+  log('nudged ' + selection.length + ' item(s) by ' + by + ' on ' + 'XYZ'[axis]);
+  renderLists(); refreshSelected(); draw();
+};
+
+// --------------------------------------------------------------- actions
+$('snapOne').onclick = () => snap(selection.slice());
+$('snapTurrets').onclick = () => snap(
+    (project.turrets||[]).map((_, index) => ({kind:'turrets', index})));
+
+// Snapping uses an EXACT raycast, not the height field. The field's cells are
+// several metres across, and on a stepped hull the nearest cell can sit on the
+// deck beside the pocket a locator belongs in - measured disagreements of 4 to
+// 9 metres on this model. The field is for live feedback only.
+async function snap(targets){
+  targets = targets.filter(t => itemOf(t));
+  if(!targets.length){ log('nothing selected to snap'); return; }
+  if(!project.model){ log('set a model file first'); return; }
+  log('exact raycast for ' + targets.length + ' point(s)...');
+  const points = targets.map(t => { const i = itemOf(t); return [i.pos[0], i.pos[2]]; });
+  const j = await post('/api/snap', {
+    model: project.model, targetLength: project.targetLength, points,
+    ignoreNamePrefix: project.ignoreNamePrefix || ''
+  });
+  const done = await pollJob(j.job, 'snap');
+  if(done.state !== 'done'){ return; }
+  let moved = 0, missing = 0;
+  done.result.results.forEach((r, n) => {
+    const item = itemOf(targets[n]); if(!item) return;
+    if(!r.hit){ missing++; return; }
+    item.pos[1] = r.hit.y;
+    item.normal = r.hit.normal;
+    moved++;
+  });
+  log('snapped ' + moved +
+      (missing ? ', ' + missing + ' had NO hull beneath (hole in the mesh)' : ''));
+  renderLists(); refreshSelected(); draw();
+}
+
+$('fitShield').onclick = () => {
+  if(!probe) return;
+  const f = probe.ellipsoid.origin;
+  project.shield = {centre:f.centre.slice(), radius:f.radius.slice(),
+                    sphere:f.sphere, halfExtent:probe.bounds.half.slice()};
+  log('shield fitted: radius ' + f.radius.join(', ') +
+      '  (inflation x' + f.inflation + ', origin-centred)');
+  syncShield(); draw();
+};
+
+$('autoBoosters').onclick = () => {
+  if(!probe) return;
+  const aft = (probe.nozzles||[]).filter(n => n.aft > 0.85);
+  if(!aft.length){ log('no aft-facing emissive discs found'); return; }
+  const biggest = Math.max(...aft.map(n => n.radius));
+  const main = aft.filter(n => n.radius >= 0.7*biggest);
+  const ratio = parseFloat($('plume').value) || 14;
+  project.boosters = main.map(n => ({
+    pos:n.pos.slice(),
+    scale:[n.radius, n.radius, +(n.radius*ratio).toFixed(2)],
+    hasTrail:true, lightScale:1.0
+  }));
+  log('boosters: ' + main.length + ' main drives kept of ' + aft.length +
+      ' aft-facing discs (radius >= 70% of ' + biggest.toFixed(2) + ')');
+  renderLists(); draw();
+};
+
+$('applyPlume').onclick = () => {
+  const ratio = parseFloat($('plume').value) || 14;
+  (project.boosters||[]).forEach(b => {
+    if(b.scale) b.scale[2] = +(b.scale[0]*ratio).toFixed(2);
+  });
+  log('plume ratio set to ' + ratio); renderLists(); draw();
+};
+
+$('autoNav').onclick = () => {
+  if(!probe) return;
+  const a = probe.anchors || {};
+  const plan = [['wingtipPort',0],['wingtipStarboard',0],['bow',0.35],
+                ['towerTop',0.6],['sternPort',0.85],['sternStarboard',0.85]];
+  project.navLights = plan.filter(([k]) => a[k]).map(([k, phase]) => ({
+    name:k, pos:a[k].slice(), blinkRate: phase ? 0.2 : 0.0, blinkPhase:phase,
+    minScale:6.0, maxScale:16.0, intensity:1.0
+  }));
+  log('nav lights placed on ' + project.navLights.length + ' silhouette extremes');
+  renderLists(); draw();
+};
+
+$('addTurret').onclick = () => {
+  project.turrets = project.turrets || [];
+  const groups = new Set((project.turrets).map(t => (t.name||'').replace(/\D/g,'')));
+  const n = groups.size + 1;
+  const x = (probe ? probe.bounds.half[0]*0.3 : 50);
+  ['a','b'].forEach((suffix, i) => {
+    const px = i ? x : -x;
+    const surf = sampleSurface(px, 0);
+    project.turrets.push({
+      name:'locator_turret_' + n + suffix,
+      pos:[+px.toFixed(2), surf ? surf.y : 0, 0],
+      normal: surf ? surf.normal.slice() : [i?0.2:-0.2, 0.98, 0]
+    });
+  });
+  log('added hardpoint ' + n + ' (a=port, b=starboard). Remember hiSlots must ' +
+      'equal the group count.');
+  renderLists(); draw();
+};
+
+const del = kind => () => {
+  // delete every selected item of this kind, highest index first so the
+  // remaining indices stay valid
+  const doomed = selection.filter(s => s.kind === kind)
+                          .map(s => s.index).sort((a,b) => b-a);
+  if(!doomed.length){ log('select one or more ' + kind + ' entries first'); return; }
+  doomed.forEach(i => project[kind].splice(i, 1));
+  setSelection([]);
+  log('deleted ' + doomed.length + ' ' + kind + ' entr' + (doomed.length>1?'ies':'y'));
+  renderLists(); refreshSelected(); draw();
+};
+$('delTurret').onclick = del('turrets');
+$('delBooster').onclick = del('boosters');
+$('delLight').onclick = del('navLights');
+
+// --------------------------------------------------------------- project
+function syncShield(){
+  const s = project.shield || {centre:[0,0,0], radius:[1,1,1], sphere:1};
+  ['sc0','sc1','sc2'].forEach((id,i) => $(id).value = s.centre[i]);
+  ['sr0','sr1','sr2'].forEach((id,i) => $(id).value = s.radius[i]);
+  $('ssph').value = s.sphere;
+}
+['sc0','sc1','sc2'].forEach((id,i) => $(id).oninput = () => {
+  project.shield.centre[i] = parseFloat($(id).value)||0; draw(); });
+['sr0','sr1','sr2'].forEach((id,i) => $(id).oninput = () => {
+  project.shield.radius[i] = parseFloat($(id).value)||0; draw(); });
+$('ssph').oninput = () => project.shield.sphere = parseFloat($('ssph').value)||0;
+
+async function loadProject(name){
+  project = await getJSON('/api/project/' + name);
+  $('model').value = project.model || '';
+  $('targetLength').value = project.targetLength || 1137;
+  try{ probe = await getJSON('/api/probe/' + name); showModelInfo(); }
+  catch(e){ probe = null; $('modelInfo').textContent = 'no probe yet'; }
+  syncShield(); renderLists(); refreshSelected(); draw(); validate();
+}
+function showModelInfo(){
+  if(!probe) return;
+  const b = probe.bounds;
+  $('modelInfo').textContent =
+    probe.vertexCount.toLocaleString() + ' verts   ' +
+    'X ' + b.min[0] + '..' + b.max[0] + '   Y ' + b.min[1] + '..' + b.max[1] +
+    '   Z ' + b.min[2] + '..' + b.max[2] + '   meanY ' + b.meanY +
+    '   nozzles ' + (probe.nozzles||[]).length;
+}
+
+async function validate(){
+  const r = await post('/api/validate', project);
+  const el = $('problems');
+  if(!r.problems.length){ el.innerHTML = '<span class="pill ok">no issues</span>'; return; }
+  el.innerHTML = r.problems.map(p => '<div>&#9888; ' + p + '</div>').join('');
+}
+
+$('save').onclick = async () => {
+  project.model = $('model').value;
+  project.targetLength = parseFloat($('targetLength').value)||1137;
+  const r = await post('/api/project/' + project.name, project);
+  log('saved ' + project.name); validate();
+};
+$('import').onclick = async () => {
+  project.model = $('model').value;
+  project.targetLength = parseFloat($('targetLength').value)||1137;
+  await post('/api/project/' + project.name, project);
+  log('probing model - this takes a while (raycasting the surface field)...');
+  const j = await post('/api/import', {name:project.name, model:project.model,
+                                       targetLength:project.targetLength});
+  const done = await pollJob(j.job, 'import');
+  if(done.state === 'done'){
+    probe = await getJSON('/api/probe/' + project.name);
+    showModelInfo(); draw();
+  }
+};
+$('build').onclick = async () => {
+  await post('/api/project/' + project.name, project);
+  const j = await post('/api/build', project);
+  await pollJob(j.job, 'build');
+};
+// Renders the authored hull through the client's own Trinity stack, with real
+// turret hardpoint mounting and boosters - the only preview that shows what the
+// game will actually draw. It publishes the hull RESOURCE so Trinity can resolve
+// the DNA; the FSD tables, the server and the ship's dogma are untouched.
+$('preview').onclick = async () => {
+  await post('/api/project/' + project.name, project);
+  log('publishing the hull resource so Trinity can resolve it, then launching...');
+  const j = await post('/api/preview', {project});
+  await pollJob(j.job, 'preview');
+};
+
+$('deploy').onclick = async () => {
+  const st = await getJSON('/api/status');
+  if(st.clientRunning){
+    log('Close the EVE client first. Also: be DOCKED if the server will restart.');
+    return;
+  }
+  if(!confirm('Deploy to the live client?\n\nFSD apply, then republish resources.\n' +
+              'Be docked if the server is restarting.')) return;
+  await post('/api/project/' + project.name, project);
+  const j = await post('/api/deploy', {project, fsd:true, restartServer:false});
+  await pollJob(j.job, 'deploy');
+};
+$('verify').onclick = async () => {
+  const j = await post('/api/verify', project);
+  const done = await pollJob(j.job, 'verify');
+  if(done.result){
+    const bad = done.result.checks.filter(c => !c.ok);
+    log(bad.length ? bad.length + ' MISMATCHES against the live hull'
+                   : 'live hull matches the project');
+  }
+};
+$('create').onclick = async () => {
+  const name = $('newName').value.trim();
+  if(!name) return;
+  project = await getJSON('/api/project/' + name);
+  await post('/api/project/' + name, project);
+  await refreshProjects(); $('project').value = name; loadProject(name);
+};
+
+async function refreshProjects(){
+  const r = await getJSON('/api/projects');
+  const picker = $('project');
+  picker.innerHTML = r.projects.map(p => '<option>' + p + '</option>').join('');
+  return r.projects;
+}
+$('project').onchange = () => loadProject($('project').value);
+
+async function pollClient(){
+  try{
+    const st = await getJSON('/api/status');
+    const el = $('clientState');
+    el.textContent = st.clientRunning ? 'client running' : 'client closed';
+    el.className = 'pill ' + (st.clientRunning ? 'bad' : 'ok');
+  }catch(e){}
+  setTimeout(pollClient, 4000);
+}
+
+window.addEventListener('resize', draw);
+(async () => {
+  const list = await refreshProjects();
+  if(list.length) loadProject(list[0]);
+  else { project = await getJSON('/api/project/venator'); syncShield(); draw(); }
+  pollClient();
+})();
+</script>

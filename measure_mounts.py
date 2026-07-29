@@ -162,7 +162,7 @@ def cluster(points, radius):
 
 
 glow = cluster(faces_by_material(("Thruster Glow",)), 0.35)
-engines = [to_eve(p) for p in faces_by_material(("Engines",))]
+engines = [to_eve(p) for p, _ in faces_by_material(("Engines",))]
 print("\nengine housing faces: %d" % len(engines))
 if engines:
     arr = np.array(engines)

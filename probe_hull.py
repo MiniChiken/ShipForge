@@ -67,6 +67,17 @@ def main():
             {"name": safe(t.name), "transform": safe(t.transform)}
             for t in hull.locatorTurrets
         ]
+        # Which materials the _m map's four bands actually select. The faction
+        # permutes these (amarrbase 2,1,0,3 vs minmatarbase 0,1,2,3), so an _m
+        # map tuned under one faction picks different materials under another.
+        result["areas"] = [
+            {"name": safe(getattr(a, "name", None)),
+             "material1": safe(getattr(a, "material1", None)),
+             "material2": safe(getattr(a, "material2", None)),
+             "material3": safe(getattr(a, "material3", None)),
+             "material4": safe(getattr(a, "material4", None))}
+            for a in (getattr(hull, "opaqueAreas", []) or [])
+        ]
         result["success"] = True
     except Exception:
         result["error"] = traceback.format_exc()

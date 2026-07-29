@@ -33,6 +33,20 @@ TEXTURES = {
 # Booster plume length as a multiple of nozzle radius, taken from stock hulls.
 PLUME_RATIO = 14.0
 
+# A nozzle counts as a main drive if its radius is at least this fraction of the
+# largest. The Venator's nozzles fall into two clear bands - 9.81/9.23 for the
+# four main drives and 5.58/4.50 for the secondaries - so anything from ~0.5 to
+# ~0.9 separates them; 0.7 sits in the middle of that gap.
+MAIN_DRIVE_FRACTION = 0.7
+
+
+def mounts_glow(here):
+    """Engine nozzle discs measured by measure_mounts.py, if available."""
+    path = os.path.join(here, "mounts.json")
+    if not os.path.isfile(path):
+        return []
+    return json.load(open(path)).get("glow") or []
+
 
 def main(out_dir):
     loc = json.load(open(os.path.join(HERE, "locators.json")))
@@ -41,12 +55,31 @@ def main(out_dir):
     # radius rather than guessed. Polygon count is a terrible proxy for size -
     # every nozzle here is 30 faces but their radii run 4.5 to 9.8, which is why
     # the first pass produced uniformly tiny glows.
-    # All 8 discs sit inside the Engines housing (Z -526.8..-307.4), so the
-    # POSITIONS were never the problem. The plume LENGTH was: stock hulls run a
-    # Z-to-XY ratio of about 14 (ab2 14-18, gb1 13.5-14.7, mb3 10-15) and this
-    # used 7, which renders a short fat cone that reads as a flat orange disc
-    # rather than an exhaust trail. lightScale is 1.0 on every stock booster.
-    engines = sorted(loc["engines"], key=lambda e: -e.get("radius", 0))[:8]
+    # Boosters. Measured facts, after two wrong theories:
+    #  * all 8 emissive discs face exactly astern (normal [0,0,-1]) and all sit
+    #    inside the Engines housing (Z -526.8..-307.4), so none is a vent and
+    #    the positions were never wrong
+    #  * stock booster transforms are pure diagonal with positive Z, same as
+    #    ours, so no rotation was missing either
+    #
+    # What was wrong: the plume LENGTH (stock runs Z:XY of about 14 - ab2 14-18,
+    # gb1 13.5-14.7, mb3 10-15 - and this used 7, rendering a stubby cone that
+    # reads as a flat disc), and the fact that this model's engine bank is
+    # STEPPED. Four big drives sit low and aft; four smaller ones sit up to 46m
+    # higher and 140m further forward. Stock ships cluster every booster at the
+    # stern, so lighting the forward-upper nozzles reads as exhaust halfway up
+    # the hull. Keep only the main drives.
+    glow = [g for g in mounts_glow(HERE) if g.get("aft", 1.0) > 0.85]
+    if glow:
+        biggest = max(g["radius"] for g in glow)
+        engines = [g for g in glow if g["radius"] >= MAIN_DRIVE_FRACTION * biggest]
+        skipped = [g for g in glow if g not in engines]
+        for g in skipped:
+            print("  SKIPPED secondary nozzle pos=%s radius=%.2f"
+                  % ([round(v, 1) for v in g["pos"]], g["radius"]))
+    else:                                   # fall back to the older measurement
+        engines = sorted(loc["engines"], key=lambda e: -e.get("radius", 0))[:4]
+
     boosters = []
     for e in engines:
         r = float(e.get("radius") or 4.0)
@@ -123,6 +156,65 @@ def main(out_dir):
                             "pos": [m["x"], round(y, 2), m["z"]],
                             "normal": normal})
 
+    # ---- lighting ---------------------------------------------------------
+    # The Armageddon donor carries spotlightSets=0 and sprite sets pinned to ITS
+    # geometry, so this hull had no light of its own anywhere. Nav lights go on
+    # the measured silhouette extremes; floodlights sit on raycast deck points
+    # and aim along the surface normal.
+    lights = json.load(open(os.path.join(HERE, "lights.json")))
+    a = lights["anchors"]
+    nav_plan = [
+        ("wingtipPort", 0.0),        # steady, like a port running light
+        ("wingtipStarboard", 0.0),
+        ("bow", 0.35),
+        ("towerTop", 0.6),
+        ("sternPort", 0.85),
+        ("sternStarboard", 0.85),
+    ]
+    nav_lights = []
+    for index, (name, phase) in enumerate(nav_plan):
+        pos = a.get(name)
+        if not pos:
+            continue
+        nav_lights.append({
+            "name": name,
+            "pos": pos,
+            # stagger the phase so they do not all blink together; the wingtips
+            # stay steady, which is what reads as a running light
+            "blinkRate": 0.0 if phase == 0.0 else 0.2,
+            "blinkPhase": phase,
+            "minScale": 6.0, "maxScale": 16.0,
+            "intensity": 1.0,
+        })
+
+    spotlights = []
+    bow = a.get("bow")
+    if bow:
+        # Bow lights, mirrored either side of the centreline and aimed forward,
+        # matching stock 'primary' - which sits just AHEAD of the nose.
+        spotlights.append({
+            "name": "primary",
+            "items": [
+                {"pos": [side * 9.0, bow[1], bow[2] + 6.0],
+                 "direction": [0.0, 0.0, 1.0],
+                 "width": 16.0, "length": 50.0,
+                 "colorType": 37, "groupIndex": 2,
+                 "spriteScale": [40.0, 80.0, 8.0]}
+                for side in (-1.0, 1.0)
+            ],
+        })
+    if lights.get("flood"):
+        spotlights.append({
+            "name": "flood",
+            "items": [
+                {"pos": f["pos"], "direction": f["normal"],
+                 "width": 22.0, "length": 70.0,
+                 "colorType": 36, "groupIndex": 0,
+                 "spriteScale": [60.0, 120.0, 12.0]}
+                for f in lights["flood"]
+            ],
+        })
+
     request = {
         "templateHullResource": TEMPLATE,
         "aggregateResource": AGGREGATE,
@@ -151,6 +243,8 @@ def main(out_dir):
         "textures": TEXTURES,
         "boosters": boosters,
         "turrets": turrets,
+        "navLights": nav_lights,
+        "spotlights": spotlights,
     }
     path = os.path.join(HERE, "venator_request.json")
     json.dump(request, open(path, "w"), indent=1)
@@ -161,6 +255,15 @@ def main(out_dir):
     print("  turrets  : %d" % len(turrets))
     for t in turrets:
         print("     %-22s %-26s normal=%s" % (t["name"], t["pos"], t["normal"]))
+    print("  navLights: %d" % len(nav_lights))
+    for n in nav_lights:
+        print("     %-18s %-28s blink=%.2f phase=%.2f"
+              % (n["name"], n["pos"], n["blinkRate"], n["blinkPhase"]))
+    print("  spotlights: %d sets" % len(spotlights))
+    for s in spotlights:
+        print("     %-10s %d items" % (s["name"], len(s["items"])))
+        for i in s["items"]:
+            print("        pos=%-26s dir=%s" % (i["pos"], i["direction"]))
 
 
 if __name__ == "__main__":

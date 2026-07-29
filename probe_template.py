@@ -21,6 +21,30 @@ def safe(v):
     return repr(v)
 
 
+def describe_fields(obj):
+    """Every public attribute, with its type and - for lists - length and the
+    class name of the first element. Enough to spot which field holds lights."""
+    out = {}
+    for name in dir(obj):
+        if name.startswith("_"):
+            continue
+        try:
+            value = getattr(obj, name)
+        except Exception:
+            continue
+        if callable(value):
+            continue
+        entry = {"type": type(value).__name__}
+        try:
+            entry["len"] = len(value)
+            if len(value):
+                entry["item"] = type(value[0]).__name__
+        except (TypeError, AttributeError):
+            entry["value"] = safe(value)
+        out[name] = entry
+    return out
+
+
 def main():
     result_path = sys.argv[1]
     request_path = sys.argv[2]
@@ -71,6 +95,9 @@ def main():
                         f for f in dir(hull)
                         if "ocator" in f and not f.startswith("_")
                     ],
+                    # Full field survey: what a hull actually exposes, so
+                    # lighting can be found instead of guessed at.
+                    "fields": describe_fields(hull),
                 }
             except Exception:
                 result["hulls"][res] = {"error": traceback.format_exc()}

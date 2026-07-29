@@ -63,8 +63,13 @@ def main():
     for icon in sorted((HERE / "icons").glob("900001_*")):
         install.publish("res:/elysian/ships/venator/icons/" + icon.name, str(icon))
 
-    # 4. the server caches its static tables at boot
-    run("docker", "restart", CONTAINER)
+    # 4. the server caches its static tables at boot - but ONLY needs restarting
+    #    when server_patch.py has actually changed something. Restarting it drops
+    #    a logged-in session ("server not responding" on undock), so it is opt-out.
+    if "--no-server-restart" in sys.argv:
+        print("\nskipping server restart (server tables unchanged)")
+    else:
+        run("docker", "restart", CONTAINER)
 
     print("\nDONE. Start the client fresh - a relog does not reload these.")
 
