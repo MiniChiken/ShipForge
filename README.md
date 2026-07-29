@@ -402,9 +402,55 @@ So they cannot drift, each having cost a debugging cycle:
 * booster plume Z:XY ~= 14 (warns outside 8-20), `lightScale` 1.0
 * shield radii never smaller than the hull's half-extents
 * resource publishes strictly **after** the FSD apply
-* refuses to deploy while the client is running; leaves the server alone by default
 
 `Build`, `Preview` and `Deploy` stay separate actions.
+
+### The deploy safety model
+
+An FSD apply is a **rollback followed by a multi-minute compile**. If anything
+fails in between, the client's tables are left pristine: the ship's typeID does
+not exist, and the only symptom is the client dying at character select with
+
+```
+characterSlots.py(1310) LoadInfo
+TypeNotFoundException: 'key not found'   typeID = 900001
+```
+
+which says nothing about FSD and reads as a broken login. That happened twice
+before the following guards existed, so they are not hypothetical:
+
+* **FSD is skipped unless its inputs changed.** `fsd="auto"` fingerprints the
+  project's FSD fields *and `fsd_insert.py`'s own source* - that module, not the
+  project, holds the donor typeIDs and the slot/tank values, so editing it is a
+  real change. A locator nudge therefore never touches the static tables.
+* **A stale build is never published.** `Build` stamps the artifact with a
+  sha256 of the authoring request; `Deploy` compares it against the project and
+  builds first when they differ. Without this, editing and hitting Deploy
+  without Build shipped the *previous* hull while every step reported success.
+* **`client_running()` fails safe.** An unanswerable process check reports
+  "running". Treating it as "closed" let a deploy roll the bundle back and only
+  then hit the suite's own client check.
+* **A failed apply retries once.** The tables are pristine at that point, which
+  is exactly what a fresh apply needs. Only a second failure raises, naming the
+  recovery command.
+* **Deploy will not claim success unless the typeID is in the live tables.** It
+  re-exports the tables the resfileindex currently points at and checks all
+  three.
+* **Only an FSD change needs the client closed.** It rewrites files the client
+  holds open. A resource publish writes a blob and one index line, which a
+  running client neither reads nor locks, so placement changes deploy live and
+  appear on the next restart.
+
+Recovering by hand, if it ever does strand:
+
+```bash
+python fsd_deploy.py apply        # restores the typeID
+# then republish every resource - the rollback reverted them
+```
+
+`finish_deploy.py` republishes `data.black`, localization and icons but **not**
+the texture DDS files. Use ShipForge's Deploy, whose project `extraResources`
+tracks all of them, or an FSD cycle will silently revert texture work.
 
 ### 8.1 Trinity preview
 
@@ -464,10 +510,24 @@ the wall was never technical.
   be recovered structurally without sec0's name strings.
 * **Oodle1** faults partway through very large multi-stream sections. Small and
   single-stream sections are solid.
-* **Hull lighting** — the SOF fields beyond `locatorSets` / `locatorTurrets` have not
-  been surveyed yet.
+* **The hull mesh still carries its own sculpted turrets.** EVE mounts functional
+  turrets at the locators, so the two intersect. Stock hulls model mounting plates,
+  not guns, so the decorative geometry (the `Venator.*` objects here) should be
+  excluded from the geometry export - which means a `.gr2` rebuild, not just a
+  re-author.
+* **Spotlights aimed along the surface normal point straight up** and render as
+  vertical light shafts rather than pools on the deck. The eight deck floods were
+  removed for that reason; only the bow pair remains. Deck lighting that reads
+  correctly needs a different aim, not a different intensity.
+* **Hull lighting** — the remaining SOF fields (`planeSets`, `hazeSets`,
+  `decalSets`) have not been surveyed. The hull still carries the Armageddon
+  donor's `forcefield` planes at its coordinates, `(0, -83, +375)`.
 * **`fighterTubes` / `fighterCapacity`** are set server-side but not yet mirrored into
   the client's `typedogma`.
+* **What rolled the FSD bundle back** on one occasion is still unexplained. Both
+  known cases were a Deploy whose apply failed after its rollback, but the
+  guards above now detect and mostly recover from it rather than leaving a dead
+  login.
 
 ---
 
