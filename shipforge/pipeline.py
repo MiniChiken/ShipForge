@@ -12,11 +12,13 @@ The rules encoded here are the ones that cost real debugging time:
     maps a fitted turret to locator_turret_<high slot index + 1>
   * restarting the server drops a logged-in session, so it is opt-in
 """
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -141,6 +143,17 @@ def run_in_client(sink, worker, *args):
          cwd=CLIENT_TQ, env=_client_env())
 
 
+def request_fingerprint(request):
+    """Stable hash of an authoring request, ignoring key order."""
+    return hashlib.sha256(
+        json.dumps(request, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def build_stamp_path(project):
+    return TOOLS / "native_out" / ("%s.buildstamp.json" % project["hullName"])
+
+
 def build(project, sink):
     """Author the SOF hull. Does not touch the live client."""
     problems = validate(project)
@@ -168,7 +181,42 @@ def build(project, sink):
                "%d spotlights"
          % (result.get("boosterItems", 0), result.get("turretLocators", 0),
             result.get("navLights", 0), result.get("spotlights", 0)))
-    return {"problems": problems, "result": result}
+
+    # Record WHAT this artifact was built from. Deploy publishes a file from
+    # disk, and without this there is nothing tying that file to the project
+    # being deployed - edit, skip Build, hit Deploy, and a stale hull ships
+    # while every step reports success.
+    fingerprint = request_fingerprint(request)
+    build_stamp_path(project).write_text(json.dumps({
+        "fingerprint": fingerprint,
+        "hullName": project["hullName"],
+        "authoredAt": result.get("authored", {}).get("name") and time.strftime(
+            "%Y-%m-%dT%H:%M:%S"),
+        "turretLocators": result.get("turretLocators"),
+        "boosterItems": result.get("boosterItems"),
+    }, indent=1), "utf-8")
+    _log(sink, "build fingerprint %s" % fingerprint[:16])
+    return {"problems": problems, "result": result, "fingerprint": fingerprint}
+
+
+def build_is_current(project):
+    """(is_current, reason) for the artifact on disk versus this project."""
+    hull_black = TOOLS / "native_out" / ("data-with-%s.black" % project["hullName"])
+    if not hull_black.is_file():
+        return False, "no hull has been built yet"
+    stamp = build_stamp_path(project)
+    if not stamp.is_file():
+        return False, "the built hull has no build stamp (built before stamping)"
+    try:
+        recorded = json.loads(stamp.read_text("utf-8")).get("fingerprint")
+    except (OSError, ValueError):
+        return False, "the build stamp is unreadable"
+    want = request_fingerprint(
+        authoring_request(project, str((TOOLS / "native_out")).replace("\\", "/")))
+    if recorded != want:
+        return False, ("the built hull was made from different data "
+                       "(stamp %s, project %s)" % (recorded[:12], want[:12]))
+    return True, "up to date"
 
 
 def publish(sink, res_path, local):
@@ -182,6 +230,19 @@ def deploy(project, sink, fsd=True, restart_server=False):
             "Close the EVE client first - the FSD apply cannot rewrite files "
             "that are open, and the client only reads the index at startup.")
 
+    # Never publish an artifact that was not built from THIS project. Deploy
+    # takes a file off disk, so without this an edit that skipped Build shipped
+    # the previous hull while every step reported success.
+    current, reason = build_is_current(project)
+    if not current:
+        _log(sink, "hull is stale (%s) - building it now" % reason)
+        build(project, sink)
+        current, reason = build_is_current(project)
+        if not current:
+            raise RuntimeError("could not produce a current hull: %s" % reason)
+    else:
+        _log(sink, "hull build is current")
+
     if fsd:
         # Rollback first: the compiler's per-table proofs are bound to the
         # pristine table hashes, so a second bundle on top is refused. But a
@@ -194,7 +255,19 @@ def deploy(project, sink, fsd=True, restart_server=False):
             _run(sink, [PY, TOOLS / "fsd_deploy.py", "rollback"])
         except RuntimeError:
             _log(sink, "nothing to roll back (no active bundle) - continuing")
-        _run(sink, [PY, TOOLS / "fsd_deploy.py", "apply"])
+        # A rollback that succeeds followed by an apply that fails is WORSE than
+        # doing nothing: the ship's typeID is gone from the client's tables and
+        # the only symptom is a broken login. Say so unmistakably.
+        try:
+            _run(sink, [PY, TOOLS / "fsd_deploy.py", "apply"])
+        except RuntimeError as exc:
+            raise RuntimeError(
+                "FSD APPLY FAILED AFTER A SUCCESSFUL ROLLBACK. The client's "
+                "tables are now PRISTINE, so typeID %s does not exist and "
+                "character select will fail with TypeNotFoundException. Fix the "
+                "cause and re-run Deploy, or run `python fsd_deploy.py apply` "
+                "directly. Underlying error: %s"
+                % (project.get("typeID", 900001), exc))
 
     # resources LAST - an apply/rollback rewrites the whole index
     hull_black = TOOLS / "native_out" / ("data-with-%s.black" % project["hullName"])
