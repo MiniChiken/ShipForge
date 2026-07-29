@@ -80,12 +80,16 @@ def check(path, sample=20000):
     off = toff
     indices = None
     for mem in TT:
-        if mem["name"] == "Indices16":
+        # Indices (32-bit) and Indices16 are alternatives - a mesh uses one or
+        # the other, so read whichever is populated.
+        if mem["name"] in ("Indices", "Indices16"):
             c = struct.unpack_from("<i", td, off)[0]
-            ip = tp[off + 4]
-            ib = g.section_data(ip[0])
-            indices = np.frombuffer(ib, dtype="<u2", count=c, offset=ip[1])
-            break
+            if c:
+                ip = tp[off + 4]
+                ib = g.section_data(ip[0])
+                dt = "<u2" if mem["name"] == "Indices16" else "<u4"
+                indices = np.frombuffer(ib, dtype=dt, count=c, offset=ip[1])
+                break
         off += grobj.member_size(mem)
 
     tris = indices.reshape(-1, 3).astype(np.int64)

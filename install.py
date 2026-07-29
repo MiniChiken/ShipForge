@@ -63,8 +63,15 @@ def publish(res_path, local):
             prefix = parts[1].split("_")[0]   # "<aa>/<pathhash>"
             break
     if prefix is None:
-        raise SystemExit("res path not in index: %s (adding new paths needs a "
-                         "path-hash we cannot derive)" % res_path)
+        # Brand-new logical path. The physical prefix is OPAQUE - the client does
+        # not recompute or verify it, it just follows the index mapping. So any
+        # deterministic allocator works; sha256 of the lowercased logical path is
+        # the convention used by the Elysian kit.
+        h = hashlib.sha256(res_path.lower().encode("utf-8")).hexdigest()[:16]
+        prefix = "%s/%s" % (h[:2], h)
+        lines.append("")          # placeholder row, filled in below
+        idx = len(lines) - 1
+        print("minted new logical path %s -> %s" % (res_path, prefix))
 
     blob_rel = "%s_%s" % (prefix, md5)
     blob_abs = os.path.join(RESFILES, blob_rel.replace("/", os.sep))
