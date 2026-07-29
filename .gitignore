@@ -1,0 +1,45 @@
+# ---------------------------------------------------------------------------
+# Third-party and rights-holder content is deliberately NOT published here.
+# This repo contains the tooling and the write-up only.
+# ---------------------------------------------------------------------------
+
+# Source model - Lucasfilm/Disney IP, obtained from Sketchfab. Not ours to
+# redistribute. Supply your own .blend and point the scripts at it.
+source/
+*.blend
+*.blend1
+
+# Decompiled EVE client Python and any module derived from it - CCP's code.
+decomp/
+inject/
+
+# liboodle - public domain (Unlicense) but a third-party repo; clone it yourself:
+#   git clone https://github.com/LunaticInAHat/liboodle ref
+ref/
+
+# Derived/extracted game and model assets - CCP or Lucasfilm content, plus
+# large intermediates that are reproducible from the pipeline.
+*.gr2
+*.dds
+*.black
+*.npy
+*.glb
+*.obj
+*.fbx
+*.png
+*.jpg
+venator_lod.bin
+venator_lod.json
+venator_mesh.bin
+venator_mesh.json
+
+# Build output and scratch
+*.exe
+*.obj
+*.pdb
+*.pyc
+*.pyj
+__pycache__/
+_probe*
+_sec*
+_singlesided_check.gr2
