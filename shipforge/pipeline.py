@@ -214,7 +214,7 @@ def project_dna(project):
                          project.get("sofRace", "amarr"))
 
 
-def _viewer_catalog(sink):
+def _base_catalog(sink):
     """Jessica ships its metadata catalogue gzipped; restore it once."""
     runtime = VIEWER / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
@@ -229,6 +229,55 @@ def _viewer_catalog(sink):
     with gzip.open(packed, "rb") as src, open(catalog, "wb") as dst:
         shutil.copyfileobj(src, dst)
     return catalog
+
+
+def _project_catalog(project, sink):
+    """A catalogue copy containing OUR ship, written beside the viewer's own.
+
+    The DNA passed on the command line is not authoritative. The viewer does:
+
+        self.catalog_index = self.find_catalog_index(self.type_id)
+        ...
+        if self.current_asset:
+            self.dna = current_asset.get("dna") or self.dna
+
+    and find_catalog_index falls back to `0` when the typeID is absent - so an
+    unknown typeID silently selects the FIRST catalogue asset and overwrites the
+    DNA, which is why previewing showed an Abaddon. Injecting an entry for our
+    typeID makes the viewer resolve our ship and keeps its nebula, SKIN and
+    weapon features working.
+    """
+    base = _base_catalog(sink)
+    if not base:
+        return None
+    payload = json.loads(base.read_text("utf-8"))
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return base
+
+    type_id = int(project.get("typeID", 900001))
+    entry = {
+        "typeID": type_id,
+        "name": project.get("displayName") or project["name"].title(),
+        "groupID": 27, "groupName": "Battleship", "categoryID": 6,
+        "graphicID": project.get("graphicID", type_id),
+        "radius": project.get("shield", {}).get("sphere") or 500,
+        "published": True,
+        "sourceKind": "shipTypes", "assetKind": "ship",
+        "sof": {"hull": project["hullName"],
+                "faction": project.get("sofFaction", "amarrbase"),
+                "race": project.get("sofRace", "amarr")},
+        "dna": project_dna(project),
+    }
+    payload["assets"] = [a for a in assets
+                         if int(a.get("typeID") or 0) != type_id] + [entry]
+    payload["selectedTypeID"] = type_id
+
+    out = VIEWER / "runtime" / ("catalog-shipforge-%s.json" % project["name"])
+    out.write_text(json.dumps(payload), "utf-8")
+    _log(sink, "catalogue: injected typeID %d as %r among %d assets -> %s"
+         % (type_id, entry["dna"], len(payload["assets"]), out.name))
+    return out
 
 
 def preview(project, sink, width=1280, height=820, mode="material"):
@@ -254,7 +303,7 @@ def preview(project, sink, width=1280, height=820, mode="material"):
         raise RuntimeError("build the hull first - %s does not exist" % hull_black)
     publish(sink, AGGREGATE, str(hull_black))
 
-    catalog = _viewer_catalog(sink)
+    catalog = _project_catalog(project, sink)
     commands = VIEWER / "runtime" / "commands"
     commands.mkdir(parents=True, exist_ok=True)
     command_path = commands / ("shipforge-%s.jsonl" % project["hullName"])
