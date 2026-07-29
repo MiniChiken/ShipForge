@@ -183,9 +183,17 @@ def deploy(project, sink, fsd=True, restart_server=False):
             "that are open, and the client only reads the index at startup.")
 
     if fsd:
-        # rollback first: the compiler's per-table proofs are bound to the
-        # pristine table hashes, so a second bundle on top is refused
-        _run(sink, [PY, TOOLS / "fsd_deploy.py", "rollback"])
+        # Rollback first: the compiler's per-table proofs are bound to the
+        # pristine table hashes, so a second bundle on top is refused. But a
+        # bundle may already be rolled back - the suite reports that as
+        # "No active Elysian bundle owns this target", which its own operation
+        # lock then re-raises as a misleading TargetBusyError because
+        # FileNotFoundError is an OSError. Not having a bundle to roll back is
+        # a fine state to apply from, so do not fail the deploy over it.
+        try:
+            _run(sink, [PY, TOOLS / "fsd_deploy.py", "rollback"])
+        except RuntimeError:
+            _log(sink, "nothing to roll back (no active bundle) - continuing")
         _run(sink, [PY, TOOLS / "fsd_deploy.py", "apply"])
 
     # resources LAST - an apply/rollback rewrites the whole index
@@ -201,7 +209,63 @@ def deploy(project, sink, fsd=True, restart_server=False):
     else:
         _log(sink, "server not restarted (its tables were unchanged)")
 
+    # Always confirm the typeID is really in the LIVE tables before claiming
+    # success. A bundle that has been rolled back leaves the ship's typeID
+    # absent, and the only symptom is the client throwing
+    # TypeNotFoundException at character select - which looks like a broken
+    # login, not a failed deploy. Cheap check, caught exactly this once.
+    missing = live_type_missing(project, sink)
+    if missing:
+        raise RuntimeError(
+            "DEPLOY INCOMPLETE: typeID %s is absent from %s in the live client "
+            "tables. The client will fail at character select with "
+            "TypeNotFoundException. Re-run the deploy."
+            % (project.get("typeID", 900001), ", ".join(missing)))
+
     _log(sink, "DONE - start the client fresh; a relog does not reload resources")
+
+
+def live_type_missing(project, sink):
+    """Which of the client's FSD tables are missing this project's typeID.
+
+    Reads the tables the live resfileindex currently points at, so it reflects
+    what the client will actually load rather than what we intended to write.
+    """
+    type_id = int(project.get("typeID", 900001))
+    index = CLIENT_TQ / "resfileindex.txt"
+    rows = {}
+    with index.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            parts = line.rstrip("\n").split(",")
+            if len(parts) >= 2:
+                rows[parts[0].lower()] = parts[1]
+
+    missing = []
+    try:
+        sys.path.insert(0, str(TOOLS))
+        import verify_fsd                                  # noqa: E402
+        _run(sink, [PY, TOOLS / "verify_fsd.py", "tasks"])
+        _run(sink, ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                    "-File", str(TOOLS / "Run-Fsd-Verify.ps1")])
+        for table in ("types", "graphicids", "typedogma"):
+            path = TOOLS / "fsd_verify" / ("%s.jsonl" % table)
+            if not path.is_file():
+                missing.append(table + " (not exported)")
+                continue
+            found = False
+            with path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    record = json.loads(line)
+                    if record.get("key", record.get("_key")) == type_id:
+                        found = True
+                        break
+            _log(sink, "live %-11s typeID %d present: %s" % (table, type_id, found))
+            if not found:
+                missing.append(table)
+    except Exception as exc:
+        _log(sink, "could not verify live tables (%s) - check manually with "
+                   "verify_fsd.py" % exc)
+    return missing
 
 
 VIEWER = Path(os.environ.get("SHIPFORGE_VIEWER", r"C:\evejs\tools\trinity-viewer"))
