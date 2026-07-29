@@ -225,10 +225,18 @@ def publish(sink, res_path, local):
 
 def deploy(project, sink, fsd=True, restart_server=False):
     """Push to the live client, in the only safe order."""
-    if client_running():
+    # Only the FSD apply needs the client closed - it rewrites files the client
+    # holds open. Publishing a resource just writes a blob and one index line,
+    # which a running client neither reads nor locks (it read the index at
+    # startup), so pure placement changes can be deployed live and picked up on
+    # the next restart. That keeps the edit-look-adjust loop short.
+    if fsd and client_running():
         raise RuntimeError(
             "Close the EVE client first - the FSD apply cannot rewrite files "
             "that are open, and the client only reads the index at startup.")
+    if not fsd:
+        _log(sink, "resource-only deploy (no FSD changes); a running client is "
+                   "fine but must be restarted to see this")
 
     # Never publish an artifact that was not built from THIS project. Deploy
     # takes a file off disk, so without this an edit that skipped Build shipped
