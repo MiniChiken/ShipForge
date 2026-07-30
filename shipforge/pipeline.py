@@ -622,6 +622,134 @@ def preview(project, sink, width=1280, height=820, mode="material"):
     return {"dna": dna, "radius": radius, "published": AGGREGATE}
 
 
+# --------------------------------------------------------------- vanilla ----
+def owned_custom_ships(project):
+    """Server items that reference this project's typeID.
+
+    Going vanilla strips the typeID from the client's tables, so anything still
+    referencing it points at a type that no longer exists - which is what breaks
+    a client at character select. The authoritative source is the items table in
+    gamestore.sqlite: characters/data.json carries a shipTypeID too, but it LAGS
+    (it read Capsule 670 while the sqlite items table already held the custom
+    ship), so trusting it would miss exactly the case this guards.
+    """
+    type_id = int(project.get("typeID", 900001))
+    container = project.get("serverContainer", "evejs-fresh-server-1")
+    local = HERE / "srv_gamestore_check.sqlite"
+    copied = subprocess.run(
+        ["docker", "cp",
+         "%s:/var/lib/evejs/gameStore/gamestore.sqlite" % container, str(local)],
+        capture_output=True, text=True)
+    if copied.returncode:
+        raise RuntimeError("could not read the server's gamestore: %s"
+                           % (copied.stderr or "").strip())
+
+    import sqlite3
+    found = []
+    connection = sqlite3.connect("file:%s?mode=ro" % local.as_posix(), uri=True)
+    try:
+        for key, blob in connection.execute("select key, json from items"):
+            try:
+                value = json.loads(blob)
+            except ValueError:
+                continue
+            stack = [value]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    if node.get("typeID") == type_id:
+                        found.append({"itemID": node.get("itemID", key),
+                                      "ownerID": node.get("ownerID"),
+                                      "locationID": node.get("locationID"),
+                                      "itemName": node.get("itemName")})
+                    stack.extend(node.values())
+                elif isinstance(node, list):
+                    stack.extend(node)
+    finally:
+        connection.close()
+        local.unlink(missing_ok=True)
+    return found
+
+
+def vanilla_blockers(project):
+    """Reasons NOT to strip the custom ship right now."""
+    problems = []
+    if client_running():
+        problems.append(
+            "the EVE client is running - close it. Live state cannot be read "
+            "reliably while it is up, and the FSD rollback cannot rewrite files "
+            "the client holds open.")
+    try:
+        owned = owned_custom_ships(project)
+    except RuntimeError as exc:
+        problems.append("%s (cannot confirm nobody owns the ship)" % exc)
+        return problems
+    for item in owned:
+        problems.append(
+            "character %s still has %s (itemID %s) at location %s. Going vanilla "
+            "removes typeID %s, so that item would reference a type the client "
+            "cannot resolve and character select would fail. Board another ship "
+            "and trash or repackage it first."
+            % (item["ownerID"], item.get("itemName") or "the custom ship",
+               item["itemID"], item["locationID"], project.get("typeID", 900001)))
+    return problems
+
+
+def go_vanilla(project, sink, force=False):
+    """Return the client and server to stock, keeping the work re-enableable.
+
+    Nothing is destroyed. install.py --revert restores the resfileindex to the
+    backup taken before the first publish, and publishing NEVER deletes a blob -
+    every custom resource stays on disk under its own md5. The project, the built
+    hull and the FSD bundle all remain, so Deploy puts it all back.
+    """
+    blockers = vanilla_blockers(project)
+    for problem in blockers:
+        _log(sink, "BLOCKER: %s" % problem)
+    if blockers and not force:
+        raise RuntimeError(
+            "refusing to go vanilla: %d blocker(s) above. Resolve them, or pass "
+            "force to override - overriding while the ship is owned WILL break "
+            "the client at character select." % len(blockers))
+    if blockers:
+        _log(sink, "FORCED past %d blocker(s)" % len(blockers))
+
+    try:
+        _run(sink, [PY, TOOLS / "fsd_deploy.py", "rollback"])
+    except RuntimeError:
+        _log(sink, "no active FSD bundle - already stock")
+    # restores every stock resource we ever republished, in one step
+    _run(sink, [PY, TOOLS / "install.py", "--revert"])
+    _run(sink, [PY, TOOLS / "server_patch.py", "revert"])
+    _run(sink, ["docker", "restart",
+                project.get("serverContainer", "evejs-fresh-server-1")])
+
+    missing = live_type_missing(project, sink)
+    state = {
+        "disabledAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "typeID": project.get("typeID"),
+        "hullName": project.get("hullName"),
+        "tablesCleared": missing,
+        "reEnable": "ShipForge Deploy, or python finish_deploy.py",
+    }
+    vanilla_state_path(project).write_text(json.dumps(state, indent=1), "utf-8")
+    if len(missing) != 3:
+        _log(sink, "WARNING: typeID still present in %s"
+             % ", ".join(t for t in ("types", "graphicids", "typedogma")
+                         if t not in missing))
+    _log(sink, "VANILLA. Nothing was deleted - Deploy restores the ship. "
+               "Start the client fresh.")
+    return state
+
+
+def vanilla_state_path(project):
+    return TOOLS / "native_out" / ("%s.vanilla.json" % project["hullName"])
+
+
+def is_vanilla(project):
+    return vanilla_state_path(project).is_file()
+
+
 def verify(project, sink):
     """Read the hull back out of the PUBLISHED data.black, not the file we wrote."""
     request = {"aggregateResource": AGGREGATE, "hullName": project["hullName"]}

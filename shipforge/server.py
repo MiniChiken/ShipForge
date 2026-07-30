@@ -208,6 +208,16 @@ class Handler(BaseHTTPRequestHandler):
                     height=int(body.get("height") or 820),
                     mode=body.get("mode") or "material"))
                 return self.send_json({"job": job["id"]})
+            if route == "/api/vanilla-check":
+                body = self.read_json()
+                return self.send_json({
+                    "isVanilla": pipeline.is_vanilla(body),
+                    "blockers": pipeline.vanilla_blockers(body)})
+            if route == "/api/vanilla":
+                body = self.read_json()
+                job = start_job("vanilla", lambda log: pipeline.go_vanilla(
+                    body["project"], log, force=bool(body.get("force"))))
+                return self.send_json({"job": job["id"]})
             if route == "/api/verify":
                 body = self.read_json()
                 job = start_job("verify", lambda log: pipeline.verify(body, log))

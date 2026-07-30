@@ -81,6 +81,7 @@
   <button id="preview" class="primary">Preview in Trinity</button>
   <button id="deploy" class="danger">Deploy</button>
   <button id="verify">Verify live</button>
+  <button id="vanilla" class="danger" title="Strip every custom ship back to stock. Nothing is deleted - Deploy puts it back.">Vanilla</button>
 </header>
 
 <div id="wrap">
@@ -1037,6 +1038,27 @@ $('deploy').onclick = async () => {
                        {project, fsd:'auto', restartServer:false});
   await pollJob(j.job, 'deploy');
 };
+// Vanilla strips the custom ship back to stock WITHOUT destroying anything: a
+// publish never deletes a blob, so every custom resource stays on disk and
+// Deploy puts it all back. The dangerous case is an item still referencing the
+// typeID - the client cannot resolve it and dies at character select - so the
+// server's item table is checked first.
+$('vanilla').onclick = async () => {
+  await post('/api/project/' + project.name, project);
+  log('checking whether anyone still owns a custom ship...');
+  const check = await post('/api/vanilla-check', project);
+  if(check.blockers.length){
+    check.blockers.forEach(b => log('BLOCKER: ' + b));
+    if(!confirm('Cannot safely go vanilla:\n\n' + check.blockers.join('\n\n') +
+                '\n\nOverride anyway? This WILL break the client at character ' +
+                'select if the ship is still owned.')) { log('vanilla cancelled'); return; }
+  } else if(!confirm('Return the client and server to stock?\n\n' +
+                     'Nothing is deleted - Deploy re-enables the ship.')) return;
+  const j = await post('/api/vanilla',
+                       {project, force: check.blockers.length > 0});
+  await pollJob(j.job, 'vanilla');
+};
+
 $('verify').onclick = async () => {
   const j = await post('/api/verify', project);
   const done = await pollJob(j.job, 'verify');
