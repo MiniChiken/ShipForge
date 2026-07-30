@@ -47,12 +47,21 @@ def build(metal_png, out_png, albedo_png=None):
     # gunmetal_metallic. slot3 is dark, so it stays a minority: 9% of the surface
     # here, which is what produced visible panel variation rather than the black
     # panels a larger share caused previously.
-    # The base covers the WHOLE atlas. `covered` marks where the metallic map is
-    # non-zero, which is only ~12% of it - masking the base by that sent 88% of
-    # the surface back to matt. Atlas cells no geometry samples are irrelevant,
-    # so there is nothing to preserve for them.
-    out = np.full(metal.shape, SLOT2, np.uint8)               # grey_steel_brushed hull
-    out[covered & (metal >= 0.25)] = SLOT3                    # gunmetal_metallic detail
+    # BAND 1 IS THE ONLY BRIGHT ONE. Read the DiffuseColor out of the material
+    # library and the names turn out to be misleading - across 641 factions the
+    # pattern is a light band 1 and near-black bands 2-4:
+    #
+    #   white_ivory_matt        0.780 0.651 0.514   (amarrbase band 1)
+    #   grey_steel_brushed      0.053 0.058 0.061   <- not light grey, near black
+    #   black_gunmetal_metallic 0.014               <- black
+    #
+    # So chasing stock ab2_t1's _m mean of 118.5 is exactly wrong for a light
+    # hull: that mean means stock ships are heavily panelled in DARK materials.
+    # Moving the body to band 2 and the detail to band 3 turned this ship grey
+    # and black. The hull belongs on band 1, with a minority on band 2 for panel
+    # variation.
+    out = np.full(metal.shape, SLOT1, np.uint8)                # bright band 1 hull
+    out[covered & (metal >= 0.25)] = SLOT2                     # dark panel detail
 
     img = np.stack([out, out, out, np.full_like(out, 255)], axis=2)
     Image.fromarray(img, "RGBA").save(out_png)

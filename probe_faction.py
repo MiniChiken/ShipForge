@@ -82,11 +82,24 @@ def main():
             f for f in dir(agg) if not f.startswith("_")
             and not callable(getattr(agg, f, None)))
 
-        wanted = set(req["factions"])
+        # an empty list means "every faction", for surveying material sets
+        wanted = set(req.get("factions") or [])
         result["factions"] = {}
         for f in getattr(agg, "faction", []) or []:
-            if f.name in wanted:
+            if wanted and f.name not in wanted:
+                continue
+            if wanted:
                 result["factions"][f.name] = fields(f)
+            else:
+                # just the Primary material set, or the dump is enormous
+                area = getattr(f, "areaTypes", None)
+                primary = getattr(area, "Primary", None) if area else None
+                result["factions"][f.name] = {
+                    "materialUsage": [getattr(f, "materialUsageMtl%d" % i, None)
+                                      for i in (1, 2, 3, 4)],
+                    "primary": [safe(getattr(primary, "material%d" % i, None))
+                                for i in (1, 2, 3, 4)] if primary else None,
+                }
 
         # material library, so slot names can be resolved to actual colours
         result["materials"] = {}
