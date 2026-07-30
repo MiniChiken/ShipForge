@@ -52,6 +52,42 @@ bpy.ops.object.join()
 base = bpy.context.view_layer.objects.active
 print("joined -> %s: %d verts %d polys" % (base.name, len(base.data.vertices), len(base.data.polygons)))
 
+# --- drop the model's own sculpted turrets --------------------------------
+# EVE mounts FUNCTIONAL turrets at locator_turret_* and the sculpted ones stay
+# put, so the two intersect. Stock hulls model mounting plates, not guns.
+#
+# Selection is by MATERIAL, not object: the atlas blend is already joined into a
+# single mesh, so the per-turret objects no longer exist - but material slots
+# survive a join. Verified with check_turret_removal.py that this leaves the
+# bounding box identical to 1e-9, so the coordinate frame (centre-on-bbox) does
+# not move and every measured locator stays valid.
+TURRET_MATERIALS = ("Turbolaser Barrell", "Turbolaser Body",
+                    "Large Side Turbolaser")
+
+slots = [(s.material.name if s.material else "") for s in base.material_slots]
+turret_slots = {i for i, name in enumerate(slots)
+                if name.startswith(TURRET_MATERIALS)}
+if turret_slots:
+    # bmesh, not select flags plus an operator. Setting poly.select in object
+    # mode and then entering edit mode lets Blender re-derive the selection when
+    # the select MODE changes, which deleted 93,616 of 134,814 faces instead of
+    # the turrets' share. bmesh names the faces to remove explicitly.
+    import bmesh
+    mesh = base.data
+    before = (len(mesh.vertices), len(mesh.polygons))
+    bm = bmesh.new()
+    bm.from_mesh(mesh)
+    doomed = [f for f in bm.faces if f.material_index in turret_slots]
+    bmesh.ops.delete(bm, geom=doomed, context="FACES")
+    bm.to_mesh(mesh)
+    bm.free()
+    mesh.update()
+    print("dropped sculpted turrets (%s): %d faces, %d -> %d verts, %d -> %d polys"
+          % (", ".join(sorted(slots[i] for i in turret_slots)), len(doomed),
+             before[0], len(mesh.vertices), before[1], len(mesh.polygons)))
+else:
+    print("no turret materials found - nothing dropped")
+
 lo = Vector((1e30,) * 3)
 hi = Vector((-1e30,) * 3)
 for c in base.bound_box:
