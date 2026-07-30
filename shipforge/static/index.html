@@ -164,6 +164,33 @@
     </div>
 
     <div class="card">
+      <h2>Hull bonuses <span id="donorPill" class="pill"></span></h2>
+      <div class="row"><label>donor</label>
+        <input id="donorTypeID" type="number" step="1">
+        <button id="loadDonor">Load</button></div>
+      <ul class="items" id="bonusList" style="max-height:120px"></ul>
+      <div class="row"><input id="donorSearch" placeholder="find donor by effect, e.g. projectile" style="flex:1">
+        <button id="findDonor">Search</button></div>
+      <ul class="items" id="donorList" style="max-height:120px"></ul>
+      <div style="color:var(--dim);font-size:11px">Bonuses live in the donor's
+        dogmaEffects. Slots can be swapped but not added &mdash; the donor fixes
+        how many a ship can carry.</div>
+    </div>
+
+    <div class="card">
+      <h2>Statistics <span id="statPill" class="pill"></span></h2>
+      <div class="row">
+        <input id="statFilter" placeholder="filter by name or id" style="flex:1">
+        <select id="statGroup"><option value="">all groups</option></select>
+      </div>
+      <ul class="items" id="statList" style="max-height:260px"></ul>
+      <div class="row"><button id="clearStat">Reset selected to donor</button></div>
+      <div style="color:var(--dim);font-size:11px">Only attributes the donor
+        already carries can be edited; one it lacks cannot be added, because an
+        FSD insert must byte-match an existing record.</div>
+    </div>
+
+    <div class="card">
       <h2>Checks</h2>
       <div id="problems" class="problems">&mdash;</div>
     </div>
@@ -757,7 +784,9 @@ async function loadProject(name){
   $('targetLength').value = project.targetLength || 1137;
   try{ probe = await getJSON('/api/probe/' + name); showModelInfo(); }
   catch(e){ probe = null; $('modelInfo').textContent = 'no probe yet'; }
+  $('donorTypeID').value = project.donorTypeID || 24694;
   syncShield(); renderLists(); refreshSelected(); draw(); validate();
+  try{ await loadDonor(); }catch(e){ log('donor metadata unavailable: ' + e.message); }
 }
 function showModelInfo(){
   if(!probe) return;
@@ -768,6 +797,139 @@ function showModelInfo(){
     '   Z ' + b.min[2] + '..' + b.max[2] + '   meanY ' + b.meanY +
     '   nozzles ' + (probe.nozzles||[]).length;
 }
+
+// ------------------------------------------------- stats and hull bonuses
+let donor = null;                 // {attributes:[...], bonusSlots:[...]}
+
+function overrides(){
+  project.dogmaAttributes = project.dogmaAttributes || {};
+  return project.dogmaAttributes;
+}
+
+async function loadDonor(){
+  const id = parseInt($('donorTypeID').value, 10) || project.donorTypeID;
+  project.donorTypeID = id;
+  donor = await getJSON('/api/donor/' + id);
+  if(donor.error){ log('donor: ' + donor.error); $('donorPill').textContent='error';
+                   $('donorPill').className='pill bad'; return; }
+  const pill = $('donorPill');
+  pill.textContent = donor.bonusSlots.length + ' bonus slots, ' +
+                     donor.attributes.length + ' attributes';
+  pill.className = 'pill ok';
+  // group filter options
+  const groups = [...new Set(donor.attributes.map(a => a.group))];
+  $('statGroup').innerHTML = '<option value="">all groups</option>' +
+      groups.map(g => '<option>' + g + '</option>').join('');
+  renderBonuses(); renderStats();
+}
+
+function renderBonuses(){
+  const el = $('bonusList'); el.innerHTML = '';
+  if(!donor) return;
+  const chosen = project.dogmaEffects || [];
+  donor.bonusSlots.forEach(b => {
+    const current = chosen[b.slot] !== undefined ? chosen[b.slot] : b.effectID;
+    const changed = current !== b.effectID;
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm">' + b.slot + '. ' +
+      (changed ? '<b>' + current + '</b> (was ' + b.effectID + ')'
+               : b.effectID) + ' &mdash; ' + b.effectName + '</span>';
+    li.title = 'click to set this slot to a different effectID';
+    li.onclick = () => {
+      const v = prompt('effectID for bonus slot ' + b.slot +
+                       '\n\ndonor default: ' + b.effectID + ' (' + b.effectName + ')',
+                       current);
+      if(v === null) return;
+      const list = donor.bonusSlots.map((s,i) =>
+          (project.dogmaEffects && project.dogmaEffects[i] !== undefined)
+            ? project.dogmaEffects[i] : s.effectID);
+      list[b.slot] = parseInt(v, 10) || b.effectID;
+      project.dogmaEffects = list;
+      renderBonuses(); validate();
+    };
+    el.appendChild(li);
+  });
+}
+
+function renderStats(){
+  const el = $('statList'); el.innerHTML = '';
+  if(!donor) return;
+  const needle = ($('statFilter').value || '').toLowerCase().trim();
+  const group = $('statGroup').value;
+  const ov = overrides();
+  let shown = 0, edited = 0;
+  donor.attributes.forEach(a => {
+    const has = ov[a.attributeID] !== undefined;
+    if(has) edited++;
+    if(group && a.group !== group) return;
+    if(needle && !(a.name.toLowerCase().includes(needle) ||
+                   String(a.attributeID) === needle)) return;
+    if(shown++ > 200) return;
+    const value = has ? ov[a.attributeID] : a.donorValue;
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm">' + a.name +
+      (a.unit ? ' <span style="color:var(--dim)">' + a.unit + '</span>' : '') +
+      '</span><span style="font-variant-numeric:tabular-nums;color:' +
+      (has ? 'var(--accent)' : 'var(--dim)') + '">' + value + '</span>';
+    li.title = a.attributeID + '  donor ' + a.donorValue +
+               (a.highIsGood ? '' : '  (lower is better)') +
+               (a.description ? '\n\n' + a.description : '');
+    li.onclick = () => {
+      const v = prompt(a.name + '  [' + a.attributeID + ']' +
+                       (a.unit ? '  (' + a.unit + ')' : '') +
+                       '\n\ndonor value: ' + a.donorValue +
+                       (a.highIsGood ? '' : '\nlower is better'), value);
+      if(v === null) return;
+      if(v === '') delete ov[a.attributeID];
+      else ov[a.attributeID] = parseFloat(v);
+      renderStats(); validate();
+    };
+    el.appendChild(li);
+  });
+  const pill = $('statPill');
+  pill.textContent = edited + ' overridden';
+  pill.className = 'pill' + (edited ? ' ok' : '');
+}
+
+$('loadDonor').onclick = loadDonor;
+$('statFilter').oninput = renderStats;
+$('statGroup').onchange = renderStats;
+$('clearStat').onclick = () => {
+  const ov = overrides();
+  const needle = ($('statFilter').value || '').toLowerCase().trim();
+  if(!needle){ log('type a name or id in the filter to pick what to reset'); return; }
+  let n = 0;
+  Object.keys(ov).forEach(id => {
+    const a = donor && donor.attributes.find(x => String(x.attributeID) === id);
+    if(a && (a.name.toLowerCase().includes(needle) || id === needle)){
+      delete ov[id]; n++;
+    }
+  });
+  log('reset ' + n + ' attribute(s) to the donor value');
+  renderStats(); validate();
+};
+$('findDonor').onclick = async () => {
+  const q = encodeURIComponent($('donorSearch').value || '');
+  const r = await getJSON('/api/donors?q=' + q);
+  const el = $('donorList'); el.innerHTML = '';
+  r.donors.forEach(d => {
+    const li = document.createElement('li');
+    li.innerHTML = '<span class="nm">' + d.typeID + '  race ' + d.raceID +
+      '  <span style="color:var(--dim)">' + d.bonusCount + ' bonuses</span>  ' +
+      d.effects.slice(0,2).join(', ') + '</span>';
+    li.title = d.effects.join('\n');
+    li.onclick = () => {
+      $('donorTypeID').value = d.typeID;
+      project.donorGraphicID = d.graphicID;
+      project.dogmaEffects = null;      // donor changed: start from its bonuses
+      loadDonor();
+      log('donor -> typeID ' + d.typeID + ' (' + d.bonusCount + ' bonuses). ' +
+          'Changing the donor is an FSD change, so the next Deploy will apply.');
+    };
+    el.appendChild(li);
+  });
+  log(r.donors.length + ' donor candidate(s)');
+};
 
 async function validate(){
   const r = await post('/api/validate', project);

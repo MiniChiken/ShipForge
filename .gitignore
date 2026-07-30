@@ -56,6 +56,9 @@ venator_request.json
 # a project, and Import regenerates the probe.
 shipforge/projects/
 shipforge/runtime/
+# exported client dogma metadata (attribute/effect names) - CCP static data
+shipforge/reference/
+shipforge/reference_work/
 shipforge/shipforge_request.json
 shipforge/shipforge_author_result.json
 shipforge/shipforge_probe_request.json

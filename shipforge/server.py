@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pipeline
+import stats
 
 HERE = Path(__file__).resolve().parent
 STATIC = HERE / "static"
@@ -161,7 +162,16 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "unknown job"}, 404)
             return self.send_json(record)
         if route == "/api/status":
-            return self.send_json({"clientRunning": pipeline.client_running()})
+            return self.send_json({"clientRunning": pipeline.client_running(),
+                                   "referenceAvailable": stats.reference_available()})
+        if route.startswith("/api/donor/"):
+            return self.send_json(stats.donor_stats(route[len("/api/donor/"):]))
+        if route.startswith("/api/donors"):
+            query = ""
+            if "?" in self.path:
+                from urllib.parse import parse_qs
+                query = (parse_qs(self.path.split("?", 1)[1]).get("q") or [""])[0]
+            return self.send_json({"donors": stats.donor_candidates(query)})
         self.send_error(404)
 
     # -------------------------------------------------------------- POST
@@ -173,7 +183,8 @@ class Handler(BaseHTTPRequestHandler):
                 body = self.read_json()
                 project_path(name).write_text(json.dumps(body, indent=1), "utf-8")
                 return self.send_json({"saved": True,
-                                       "problems": pipeline.validate(body)})
+                                       "problems": pipeline.validate(body)
+                                                   + stats.validate_stats(body)})
             if route == "/api/import":
                 return self.handle_import(self.read_json())
             if route == "/api/build":
@@ -202,7 +213,9 @@ class Handler(BaseHTTPRequestHandler):
                 job = start_job("verify", lambda log: pipeline.verify(body, log))
                 return self.send_json({"job": job["id"]})
             if route == "/api/validate":
-                return self.send_json({"problems": pipeline.validate(self.read_json())})
+                body = self.read_json()
+                return self.send_json({"problems":
+                    pipeline.validate(body) + stats.validate_stats(body)})
             if route == "/api/snap":
                 return self.handle_snap(self.read_json())
         except Exception as exc:

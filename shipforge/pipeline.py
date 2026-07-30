@@ -71,7 +71,9 @@ def client_running():
 
 
 FSD_FIELDS = ("typeID", "graphicID", "hullName", "sofFaction", "sofRace",
-              "iconFolder", "dogma", "displayName")
+              "iconFolder", "dogma", "displayName", "radius",
+              # stats and hull bonuses land in typedogma, so they are FSD too
+              "donorTypeID", "donorGraphicID", "dogmaAttributes", "dogmaEffects")
 
 
 def fsd_fingerprint(project):
