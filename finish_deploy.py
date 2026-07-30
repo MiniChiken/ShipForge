@@ -46,10 +46,29 @@ def main():
     # 2. one combined change set: graphicids + types + typedogma
     run(PY, "fsd_deploy.py", "apply")
 
-    # 3. only now publish resources, so the apply cannot revert them
-    hull = HERE / "native_out" / "data-with-venator.black"
+    # 3. only now publish resources, so the apply cannot revert them.
+    #    The aggregate name follows the project's hullName - hardcoding
+    #    "data-with-venator.black" published a leftover from an older hull name
+    #    on every deploy, silently reverting the ship to a build from hours
+    #    earlier. That is how the re-measured locators were lost: the client got
+    #    a hull whose turrets and lights still sat 19.8m high, while the project,
+    #    the editor and the newer build on disk all agreed they were correct.
+    sys.path.insert(0, str(HERE / "shipforge"))
+    import pipeline
+
+    project = json.loads(
+        (HERE / "shipforge" / "projects" / "venator.json").read_text("utf-8"))
+    current, why = pipeline.build_is_current(project)
+    if not current:
+        raise SystemExit(
+            "the built hull does not match the project (%s).\n"
+            "Rebuild before deploying, or the client gets stale geometry and "
+            "locators." % why)
+
+    hull = HERE / "native_out" / ("data-with-%s.black" % project["hullName"])
     if not hull.is_file():
         raise SystemExit("missing %s - run the authoring pass first" % hull)
+    print("publishing hull aggregate %s" % hull.name)
     install.publish(AGGREGATE, str(hull))
 
     request = json.loads((HERE / "loc_request.json").read_text("utf-8"))
