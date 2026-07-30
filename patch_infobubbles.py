@@ -20,6 +20,11 @@ Entry shape, per typeID:
 `nameID` is a localization message, so cloning the DONOR's entry gives text that
 matches the bonuses the ship actually has - it carries the donor's dogmaEffects.
 
+The one thing a clone gets wrong is the MAGNITUDE. Each entry stores its own
+number, so retuning the attribute a bonus reads leaves the panel quoting the
+donor's figure while the ship does something else - the displayed-value-disagrees
+-with-reality bug this project keeps hitting. `retune` fixes those numbers up.
+
     python patch_infobubbles.py            # write and publish
     python patch_infobubbles.py --dry-run
 """
@@ -32,6 +37,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE / "shipforge"))
 CLIENT = Path(r"C:\EVE-EVEJS\client\EVE")
 INDEX = CLIENT / "tq" / "resfileindex.txt"
 RESOURCE = "res:/staticdata/infobubbles.static"
@@ -56,6 +62,62 @@ def pristine_blob():
             if parts and parts[0].lower() == RESOURCE:
                 return CLIENT / "ResFiles" / parts[1].replace("/", os.sep)
     raise SystemExit("%s is not in the index" % RESOURCE)
+
+
+def retune(entry, proj, donor_id):
+    """Rewrite cloned trait magnitudes to the project's own attribute values.
+
+    Entries carry no link back to the effect they describe, so they are matched
+    by the DONOR value they were written from, inside the section the effect
+    belongs to: a shipBonus* attribute scales per skill level and so appears
+    under "types", everything else is a flat role bonus. Only attributes some
+    effect on the hull actually reads are considered. An ambiguous or missing
+    match is reported rather than guessed at - a wrong number here is worse than
+    an unchanged one, because it reads as authoritative.
+    """
+    import stats
+
+    overrides = {int(k): v for k, v in (proj.get("dogmaAttributes") or {}).items()}
+    dogma = stats._typedogma().get(int(donor_id)) or {}
+    donor_values = {a["attributeID"]: a["value"]
+                    for a in (dogma.get("dogmaAttributes") or [])}
+    meta = stats.attribute_meta()
+
+    # attributeID -> is it read by one of this hull's bonuses, and how
+    read_by_bonus = {}
+    for slot in (dogma.get("dogmaEffects") or []):
+        effect = stats.effect_meta().get(slot.get("effectID")) or {}
+        for modifier in (effect.get("modifierInfo") or []):
+            read_by_bonus[modifier.get("modifyingAttributeID")] = slot["effectID"]
+
+    for attribute_id, wanted in sorted(overrides.items()):
+        if attribute_id not in read_by_bonus:
+            continue                       # a plain stat, not a bonus magnitude
+        was = donor_values.get(attribute_id)
+        if was is None or was == wanted:
+            continue
+
+        name = (meta.get(attribute_id) or {}).get("name") or ""
+        per_level = name.lower().startswith("shipbonus") and "role" not in name.lower()
+        if per_level:
+            sections = [("types[%s]" % skill, rows)
+                        for skill, rows in (entry.get("types") or {}).items()]
+        else:
+            sections = [("roleBonuses", entry.get("roleBonuses") or [])]
+
+        hits = [(where, row) for where, rows in sections
+                for row in rows if row.get("bonus") == was]
+        label = "attr %d (%s) %g -> %g" % (attribute_id, name, was, wanted)
+        if len(hits) == 1:
+            where, row = hits[0]
+            row["bonus"] = wanted
+            print("   retuned %s in %s" % (label, where))
+        elif not hits:
+            print("   NO trait entry quotes %g for %s - panel text will not "
+                  "mention it" % (was, label))
+        else:
+            print("   AMBIGUOUS %s: %d entries quote %g (%s) - left alone"
+                  % (label, len(hits), was, ", ".join(w for w, _ in hits)))
 
 
 def main(dry_run):
@@ -83,7 +145,9 @@ def main(dry_run):
                              % donor_id)
 
         already = type_id in bonuses
-        bonuses[type_id] = json.loads(json.dumps(donor))    # deep copy
+        entry = json.loads(json.dumps(donor))               # deep copy
+        bonuses[type_id] = entry
+        retune(entry, proj, donor_id)
         skills = ", ".join(sorted(donor.get("types", {})))
         print("%s typeID %s from donor %s"
               % ("updated" if already else "added", type_id, donor_id))
