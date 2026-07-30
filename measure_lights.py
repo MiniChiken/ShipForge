@@ -20,13 +20,29 @@ OUT = sys.argv[sys.argv.index("--") + 1] if "--" in sys.argv else "lights.json"
 TARGET_LENGTH = 1137.0
 
 meshes = [o for o in bpy.data.objects if o.type == "MESH"]
-lo = Vector((1e30,) * 3)
-hi = Vector((-1e30,) * 3)
-for o in meshes:
-    for c in o.bound_box:
-        w = o.matrix_world @ Vector(c)
-        lo = Vector((min(lo.x, w.x), min(lo.y, w.y), min(lo.z, w.z)))
-        hi = Vector((max(hi.x, w.x), max(hi.y, w.y), max(hi.z, w.z)))
+# The frame MUST come from VERTICES, not object bound_box corners. A rotated
+# object's transformed local bbox overstates its extent, so a scene of separate
+# objects yields a bigger box than the same mesh joined - and since the frame is
+# centre-on-bbox, the two disagree. On this model the identical 75,627 vertices
+# gave Y -125.954..+125.954 joined (venator_atlas.blend, which the .gr2 was
+# exported from) against -106.111..+145.797 unjoined: a pure 19.843m shift that
+# put every locator measured here that far above the hull. See compare_frames.py.
+def _frame_vertices():
+    chunks = []
+    for o in meshes:
+        n = len(o.data.vertices)
+        if not n:
+            continue
+        flat = np.empty(n * 3, dtype=np.float64)
+        o.data.vertices.foreach_get("co", flat)
+        m = np.array(o.matrix_world)
+        chunks.append(flat.reshape(n, 3) @ m[:3, :3].T + m[:3, 3])
+    return np.concatenate(chunks)
+
+
+_fv = _frame_vertices()
+lo = Vector(_fv.min(axis=0).tolist())
+hi = Vector(_fv.max(axis=0).tolist())
 scale = TARGET_LENGTH / max(hi - lo)
 centre = (lo + hi) * 0.5
 
