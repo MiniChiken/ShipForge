@@ -359,6 +359,11 @@ python shipforge/server.py --open        # http://127.0.0.1:8770
 python shipforge/seed_venator.py         # seed a project from an existing build
 ```
 
+**New to it? Start with [shipforge/GETTING-STARTED.md](shipforge/GETTING-STARTED.md)** —
+a walkthrough from a model file to a flyable ship, including what ShipForge
+expects of a model (nose along Blender -Y, +Z up; materials that unlock the
+auto-detection) and the traps that are worth knowing before the first import.
+
 Standard library only, nothing to install. Long steps (a Blender probe, authoring
 inside the client, a deploy) run as background jobs whose log the UI tails.
 
