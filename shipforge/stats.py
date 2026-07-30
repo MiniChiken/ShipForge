@@ -70,6 +70,110 @@ def reference_available():
     return (REFERENCE / "dogmaattributes.jsonl").is_file()
 
 
+# --------------------------------------------------------------- legibility
+# EVE dogma operation codes. Only the ones ship bonuses actually use are named
+# specially; the rest fall through to "<op> <value>".
+OPERATIONS = {0: "set to", 1: "premul", 2: "prediv", 3: "add", 4: "subtract",
+              5: "postmul", 6: "percent", 7: "postdiv", 8: "set to"}
+
+_LOCALIZATION = {}
+
+
+def prettify(name):
+    """camelCase attribute identifier -> readable words."""
+    if not name:
+        return ""
+    out = []
+    for index, char in enumerate(str(name)):
+        if char.isupper() and index and not str(name)[index - 1].isupper():
+            out.append(" ")
+        out.append(char)
+    text = "".join(out).replace("_", " ").strip()
+    return text[:1].upper() + text[1:]
+
+
+def _localization():
+    """messageID -> English text, from the localization pickle we author into.
+
+    Effect, attribute and group NAMES in the tables are internal identifiers;
+    the human wording lives in localization, so legible bonus text needs both.
+    """
+    global _LOCALIZATION
+    if _LOCALIZATION:
+        return _LOCALIZATION
+    import pickle
+    for candidate in (TOOLS / "loc_out" / "localization_fsd_en-us.pickle",
+                      TOOLS / "loc_out" / "localization_fsd_main.pickle"):
+        if not candidate.is_file():
+            continue
+        try:
+            with candidate.open("rb") as fh:
+                blob = pickle.load(fh, encoding="latin1")
+            messages = blob[1] if isinstance(blob, tuple) else blob
+            _LOCALIZATION = {k: (v[0] if isinstance(v, (tuple, list)) else v)
+                             for k, v in messages.items()}
+            break
+        except Exception:
+            continue
+    return _LOCALIZATION
+
+
+def type_name(type_id):
+    record = _types().get(type_id) or {}
+    return _localization().get(record.get("typeNameID")) or ("type %s" % type_id)
+
+
+def group_name(group_id):
+    groups = _load_jsonl(REFERENCE / "groups.jsonl")
+    record = groups.get(group_id) or {}
+    return _localization().get(record.get("groupNameID")) or ("group %s" % group_id)
+
+
+def describe_effect(effect_id, donor_attributes=None):
+    """Plain-English reading of a hull bonus, from its modifierInfo.
+
+    A bonus is not stored as text anywhere - it is a list of modifiers saying
+    "scale attribute X on things matching Y by the ship's attribute Z". The
+    magnitude therefore lives on the DONOR's own attributes, which is why
+    donor_attributes is needed to say "+10%" rather than "+shipBonusMB2%".
+    """
+    meta = effect_meta().get(effect_id) or {}
+    attributes = attribute_meta()
+    donor_attributes = donor_attributes or {}
+    lines = []
+    for modifier in (meta.get("modifierInfo") or []):
+        modified = attributes.get(modifier.get("modifiedAttributeID")) or {}
+        what = prettify(modified.get("name")) or (
+            "attribute %s" % modifier.get("modifiedAttributeID"))
+
+        amount_id = modifier.get("modifyingAttributeID")
+        amount = donor_attributes.get(amount_id)
+        operation = OPERATIONS.get(modifier.get("operation"), "modify")
+        if amount is None:
+            magnitude = prettify((attributes.get(amount_id) or {}).get("name")) or "?"
+        elif operation == "percent":
+            magnitude = "%+g%%" % amount
+        else:
+            magnitude = "%g" % amount
+
+        if modifier.get("skillTypeID"):
+            target = "modules requiring %s" % type_name(modifier["skillTypeID"])
+        elif modifier.get("groupID"):
+            target = "%s modules" % group_name(modifier["groupID"])
+        else:
+            target = "the ship"
+
+        verb = magnitude if operation == "percent" else "%s %s" % (operation, magnitude)
+        lines.append("%s %s on %s" % (verb, what, target))
+
+    if not lines:
+        return meta.get("effectName") or ("effect %s" % effect_id)
+    per_level = " per skill level" if any(
+        m.get("func") == "LocationRequiredSkillModifier"
+        for m in (meta.get("modifierInfo") or [])) else ""
+    return "; ".join(lines) + per_level
+
+
 def donor_stats(donor_type_id):
     """Editable stats and bonuses for a donor, with client metadata attached."""
     dogma = _typedogma().get(int(donor_type_id))
@@ -94,6 +198,7 @@ def donor_stats(donor_type_id):
         rows.append({
             "attributeID": attribute_id,
             "name": meta.get("name") or ("attribute %s" % attribute_id),
+            "label": prettify(meta.get("name")) or ("Attribute %s" % attribute_id),
             "description": (meta.get("description") or "")[:220],
             "donorValue": entry.get("value"),
             "defaultValue": meta.get("defaultValue"),
@@ -105,6 +210,8 @@ def donor_stats(donor_type_id):
     rows.sort(key=lambda r: (r["group"] == "Other", r["group"], r["order"],
                              r["name"].lower()))
 
+    own = {e.get("attributeID"): e.get("value")
+           for e in (dogma.get("dogmaAttributes") or [])}
     bonuses = []
     for index, entry in enumerate(dogma.get("dogmaEffects") or []):
         effect_id = entry.get("effectID")
@@ -113,10 +220,12 @@ def donor_stats(donor_type_id):
             "slot": index,
             "effectID": effect_id,
             "effectName": meta.get("effectName") or ("effect %s" % effect_id),
+            "text": describe_effect(effect_id, own),
             "isDefault": bool(entry.get("isDefault")),
         })
 
     return {"donorTypeID": int(donor_type_id),
+            "donorName": type_name(int(donor_type_id)),
             "attributes": rows,
             "bonusSlots": bonuses}
 

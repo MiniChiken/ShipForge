@@ -30,7 +30,21 @@
              pointer-events:none;letter-spacing:.06em;text-transform:uppercase}
   .view .hint{position:absolute;bottom:5px;left:8px;font-size:11px;
               color:var(--dim);pointer-events:none}
-  aside{display:flex;flex-direction:column;gap:8px;min-height:0;overflow:auto}
+  aside{display:flex;flex-direction:column;gap:8px;min-height:0}
+  #tabs{display:flex;gap:4px;flex:0 0 auto}
+  #tabs button{flex:1;border-radius:3px 3px 0 0;padding:5px 4px;
+               border-bottom-color:transparent;color:var(--dim)}
+  #tabs button.on{color:var(--accent);border-color:var(--accent);
+                  border-bottom-color:var(--panel);background:var(--panel)}
+  #panes{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;gap:8px}
+  .pane{display:none;flex-direction:column;gap:8px}
+  .pane.on{display:flex}
+  .bonus{padding:5px 6px;border-left:2px solid var(--accent);margin-bottom:5px;
+         background:var(--panel2);border-radius:0 3px 3px 0;cursor:pointer}
+  .bonus:hover{outline:1px solid var(--line)}
+  .bonus .txt{color:var(--ink)}
+  .bonus .meta{color:var(--dim);font-size:11px;margin-top:2px}
+  .bonus.changed{border-left-color:var(--sel)}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:4px;
         padding:9px 10px}
   .card h2{font-size:11px;letter-spacing:.08em;text-transform:uppercase;
@@ -83,6 +97,14 @@
   </div>
 
   <aside>
+    <div id="tabs">
+      <button data-pane="geometry" class="on">Geometry</button>
+      <button data-pane="placement">Placement</button>
+      <button data-pane="attributes">Attributes</button>
+    </div>
+
+    <div id="panes">
+    <div class="pane on" id="pane-geometry">
     <div class="card">
       <h2>Model</h2>
       <div class="row"><label>file</label>
@@ -106,6 +128,9 @@
         enclose a hull &mdash; Fit inflates until every vertex is inside.</div>
     </div>
 
+    </div><!-- /pane-geometry -->
+
+    <div class="pane" id="pane-placement">
     <div class="card">
       <h2>Turrets <span id="groupInfo" class="pill"></span></h2>
       <ul class="items" id="turretList"></ul>
@@ -163,16 +188,20 @@
       </div>
     </div>
 
+    </div><!-- /pane-placement -->
+
+    <div class="pane" id="pane-attributes">
     <div class="card">
       <h2>Hull bonuses <span id="donorPill" class="pill"></span></h2>
       <div class="row"><label>donor</label>
         <input id="donorTypeID" type="number" step="1">
+        <span id="donorName" style="color:var(--dim)"></span>
         <button id="loadDonor">Load</button></div>
-      <ul class="items" id="bonusList" style="max-height:120px"></ul>
+      <div id="bonusList"></div>
       <div class="row"><input id="donorSearch" placeholder="find donor by effect, e.g. projectile" style="flex:1">
         <button id="findDonor">Search</button></div>
       <ul class="items" id="donorList" style="max-height:120px"></ul>
-      <div style="color:var(--dim);font-size:11px">Bonuses live in the donor's
+      <div style="color:var(--dim);font-size:11px">Bonuses are the donor's
         dogmaEffects. Slots can be swapped but not added &mdash; the donor fixes
         how many a ship can carry.</div>
     </div>
@@ -189,6 +218,9 @@
         already carries can be edited; one it lacks cannot be added, because an
         FSD insert must byte-match an existing record.</div>
     </div>
+
+    </div><!-- /pane-attributes -->
+    </div><!-- /panes -->
 
     <div class="card">
       <h2>Checks</h2>
@@ -816,6 +848,7 @@ async function loadDonor(){
   pill.textContent = donor.bonusSlots.length + ' bonus slots, ' +
                      donor.attributes.length + ' attributes';
   pill.className = 'pill ok';
+  $('donorName').textContent = donor.donorName || '';
   // group filter options
   const groups = [...new Set(donor.attributes.map(a => a.group))];
   $('statGroup').innerHTML = '<option value="">all groups</option>' +
@@ -823,33 +856,54 @@ async function loadDonor(){
   renderBonuses(); renderStats();
 }
 
+// A bonus is not stored as text anywhere: it is a list of modifiers saying
+// "scale attribute X on things matching Y by the ship's attribute Z". The server
+// resolves those against the client's own dogma tables and localization, so what
+// lands here is already readable - "+10% Damage Multiplier on modules requiring
+// Large Projectile Turret per skill level" rather than shipPTdamageBonusMB2.
 function renderBonuses(){
   const el = $('bonusList'); el.innerHTML = '';
-  if(!donor) return;
+  if(!donor || !donor.bonusSlots) return;
   const chosen = project.dogmaEffects || [];
   donor.bonusSlots.forEach(b => {
     const current = chosen[b.slot] !== undefined ? chosen[b.slot] : b.effectID;
     const changed = current !== b.effectID;
-    const li = document.createElement('li');
-    li.innerHTML = '<span class="nm">' + b.slot + '. ' +
-      (changed ? '<b>' + current + '</b> (was ' + b.effectID + ')'
-               : b.effectID) + ' &mdash; ' + b.effectName + '</span>';
-    li.title = 'click to set this slot to a different effectID';
-    li.onclick = () => {
-      const v = prompt('effectID for bonus slot ' + b.slot +
-                       '\n\ndonor default: ' + b.effectID + ' (' + b.effectName + ')',
-                       current);
+    const div = document.createElement('div');
+    div.className = 'bonus' + (changed ? ' changed' : '');
+    div.innerHTML =
+      '<div class="txt">' + (changed
+        ? 'slot ' + b.slot + ' replaced with effect ' + current
+        : b.text) + '</div>' +
+      '<div class="meta">slot ' + b.slot + ' &middot; effect ' + b.effectID +
+      ' &middot; ' + b.effectName + (changed ? ' (donor default)' : '') + '</div>';
+    div.title = 'click to put a different effectID in this slot';
+    div.onclick = () => {
+      const v = prompt('effectID for bonus slot ' + b.slot + '\n\n' +
+                       'donor default: ' + b.effectID + '\n' + b.text +
+                       '\n\nblank restores the donor default', current);
       if(v === null) return;
       const list = donor.bonusSlots.map((s,i) =>
           (project.dogmaEffects && project.dogmaEffects[i] !== undefined)
             ? project.dogmaEffects[i] : s.effectID);
-      list[b.slot] = parseInt(v, 10) || b.effectID;
-      project.dogmaEffects = list;
+      list[b.slot] = v === '' ? b.effectID : (parseInt(v, 10) || b.effectID);
+      project.dogmaEffects = list.every((e,i) =>
+          e === donor.bonusSlots[i].effectID) ? null : list;
       renderBonuses(); validate();
     };
-    el.appendChild(li);
+    el.appendChild(div);
   });
 }
+
+// tabs
+document.querySelectorAll('#tabs button').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('#tabs button').forEach(b =>
+        b.classList.toggle('on', b === btn));
+    document.querySelectorAll('.pane').forEach(p =>
+        p.classList.toggle('on', p.id === 'pane-' + btn.dataset.pane));
+    draw();
+  };
+});
 
 function renderStats(){
   const el = $('statList'); el.innerHTML = '';
@@ -867,15 +921,15 @@ function renderStats(){
     if(shown++ > 200) return;
     const value = has ? ov[a.attributeID] : a.donorValue;
     const li = document.createElement('li');
-    li.innerHTML = '<span class="nm">' + a.name +
+    li.innerHTML = '<span class="nm">' + (a.label || a.name) +
       (a.unit ? ' <span style="color:var(--dim)">' + a.unit + '</span>' : '') +
       '</span><span style="font-variant-numeric:tabular-nums;color:' +
       (has ? 'var(--accent)' : 'var(--dim)') + '">' + value + '</span>';
-    li.title = a.attributeID + '  donor ' + a.donorValue +
+    li.title = a.name + '  [' + a.attributeID + ']  donor ' + a.donorValue +
                (a.highIsGood ? '' : '  (lower is better)') +
                (a.description ? '\n\n' + a.description : '');
     li.onclick = () => {
-      const v = prompt(a.name + '  [' + a.attributeID + ']' +
+      const v = prompt((a.label || a.name) + '  [' + a.attributeID + ']' +
                        (a.unit ? '  (' + a.unit + ')' : '') +
                        '\n\ndonor value: ' + a.donorValue +
                        (a.highIsGood ? '' : '\nlower is better'), value);

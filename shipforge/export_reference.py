@@ -28,7 +28,7 @@ CLIENT = Path(r"C:\EVE-EVEJS\client\EVE")
 INDEX = CLIENT / "tq" / "resfileindex.txt"
 OUT = HERE / "reference"
 WORK = HERE / "reference_work"
-TABLES = ("dogmaattributes", "dogmaeffects", "dogmaunits")
+TABLES = ("dogmaattributes", "dogmaeffects", "dogmaunits", "groups")
 
 
 def index_map():
