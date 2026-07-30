@@ -31,7 +31,20 @@ MATS = ["Thruster Glow", "Engines", "Engine Folds", "Tail", "Back Half",
         "Turbolaser Barrell.001", "Aux Hangar Door.001", "Hangar Door.001",
         "Lower Trench.001"]
 
-NEUTRALISE = ("Hangar Door", "Hangar Door.001")
+# Everything that makes the centreline read differently from the hull around it.
+# Measured cell luminances against a hull reference of ~140:
+#
+#   Hangar Door / .001    52   strongly red, [89.9 42.2 42.2] saturation 0.53
+#   Lower Trench / .001  111   the trench itself, a fifth darker than the hull
+#   Side Hangar Door     191   exactly the atlas FILL colour - never textured
+#   Attached Armor Plates191   likewise: composite_atlas found no Base Color for it
+#
+# The last two are not a tint at all: composite_atlas.py leaves a cell at its fill
+# (190,190,190) when a material has no image feeding Principled Base Color, so
+# those surfaces render as flat bright grey and stand out against the hull.
+NEUTRALISE = ("Hangar Door", "Hangar Door.001",
+              "Lower Trench", "Lower Trench.001",
+              "Side Hangar Door", "Attached Armor Plates")
 # the surrounding hull materials, whose brightness the stripe should match
 REFERENCE = ("Front Half", "Back Half", "Command Area", "Hangar Bay", "Tail")
 LUMA = np.array([0.2126, 0.7152, 0.0722], dtype=np.float32)
