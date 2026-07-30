@@ -96,3 +96,7 @@ __pycache__/
 _probe*
 _sec*
 _singlesided_check.gr2
+
+# Save-game backups taken by park_venator.py. These are the USER SAVE -
+# character, wallet, assets - and this repo is public. Never commit them.
+restore/
