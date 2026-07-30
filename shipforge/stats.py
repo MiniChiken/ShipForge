@@ -168,10 +168,18 @@ def describe_effect(effect_id, donor_attributes=None):
 
     if not lines:
         return meta.get("effectName") or ("effect %s" % effect_id)
-    per_level = " per skill level" if any(
-        m.get("func") == "LocationRequiredSkillModifier"
-        for m in (meta.get("modifierInfo") or [])) else ""
-    return "; ".join(lines) + per_level
+
+    # "per skill level" comes from the MODIFYING attribute, not the func.
+    # LocationRequiredSkillModifier only means "applies to modules requiring this
+    # skill"; the per-level multiplication is what EVE does to shipBonus*
+    # attributes. Role attributes - shipBonusRole7, eliteBonusViolatorsRole1 -
+    # are flat, so labelling them per-level overstates them fivefold.
+    scaled = False
+    for modifier in (meta.get("modifierInfo") or []):
+        name = (attributes.get(modifier.get("modifyingAttributeID")) or {}).get("name") or ""
+        if name.lower().startswith("shipbonus") and "role" not in name.lower():
+            scaled = True
+    return "; ".join(lines) + (" per skill level" if scaled else " (role bonus)")
 
 
 def donor_stats(donor_type_id):

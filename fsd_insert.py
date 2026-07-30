@@ -220,29 +220,60 @@ def main():
 
     dogma_changes = [FsdChange(ChangeOperation.INSERT, TYPE_ID,
                                value=copy.deepcopy(template))]
-    for attribute_id, new_value in sorted(overrides.items()):
-        index = attribute_index(template, attribute_id)
+
+    # Attributes the donor does NOT carry can still be added: the byte-match rule
+    # constrains the INSERT, but an UPDATE assigns target[path[-1]] = value, so an
+    # update at ("dogmaAttributes",) replaces the WHOLE LIST. That decouples what
+    # a ship can do from whichever donor happened to be cloned - without it, any
+    # new bonus mechanism means hunting for a hull that already has the attribute.
+    carried = {a.get("attributeID") for a in attrs}
+    added = sorted(a for a in overrides if a not in carried)
+    if added:
+        new_list = copy.deepcopy(attrs)
+        for attribute_id in added:
+            entry = copy.deepcopy(attrs[0])
+            entry["attributeID"] = attribute_id
+            entry["value"] = overrides[attribute_id]
+            new_list.append(entry)
+        for entry in new_list:
+            if entry.get("attributeID") in overrides:
+                entry["value"] = overrides[entry["attributeID"]]
         dogma_changes.append(
             FsdChange(ChangeOperation.UPDATE, TYPE_ID,
-                      path=("dogmaAttributes", index, "value"), value=new_value))
+                      path=("dogmaAttributes",), value=new_list))
+    else:
+        for attribute_id, new_value in sorted(overrides.items()):
+            index = attribute_index(template, attribute_id)
+            dogma_changes.append(
+                FsdChange(ChangeOperation.UPDATE, TYPE_ID,
+                          path=("dogmaAttributes", index, "value"),
+                          value=new_value))
 
     # Hull bonuses. The list LENGTH is fixed by the donor - a longer list cannot
     # be authored through path updates - so a project can only replace the
     # bonuses in the slots the donor already has.
     if swaps:
         if max(swaps) >= len(effects):
-            raise SystemExit(
-                "project asks for %d hull bonuses but donor %d only has %d "
-                "effect slots. The donor fixes how many bonuses a ship can "
-                "carry; pick one with at least that many."
-                % (max(swaps) + 1, TEMPLATE_TYPE, len(effects)))
-        for index, effect_id in sorted(swaps.items()):
-            if effects[index].get("effectID") == effect_id:
-                continue
+            # longer than the donor's list: replace it wholesale, same trick as
+            # the attributes above. The donor no longer caps how many bonuses a
+            # ship can have.
+            new_effects = []
+            for index in range(max(swaps) + 1):
+                entry = copy.deepcopy(effects[min(index, len(effects) - 1)])
+                entry["effectID"] = swaps[index] if index in swaps \
+                    else effects[index]["effectID"]
+                new_effects.append(entry)
             dogma_changes.append(
                 FsdChange(ChangeOperation.UPDATE, TYPE_ID,
-                          path=("dogmaEffects", index, "effectID"),
-                          value=effect_id))
+                          path=("dogmaEffects",), value=new_effects))
+        else:
+            for index, effect_id in sorted(swaps.items()):
+                if effects[index].get("effectID") == effect_id:
+                    continue
+                dogma_changes.append(
+                    FsdChange(ChangeOperation.UPDATE, TYPE_ID,
+                              path=("dogmaEffects", index, "effectID"),
+                              value=effect_id))
 
     project.change_sets["typedogma"] = FsdChangeSet(
         table_name="typedogma", base_sha256=ddoc.source_sha256,
@@ -251,11 +282,18 @@ def main():
     print("typedogma %d <- clone of %d (%d attributes, %d effects), %d patches"
           % (TYPE_ID, TEMPLATE_TYPE, len(attrs), len(effects),
              len(dogma_changes) - 1))
+    by_id = {a.get("attributeID"): a.get("value") for a in attrs}
     for attribute_id, new_value in sorted(overrides.items()):
-        old = attrs[attribute_index(template, attribute_id)].get("value")
+        if attribute_id not in by_id:
+            print("    attr %-5s %12s -> %s  (ADDED)" % (attribute_id, "-", new_value))
+            continue
+        old = by_id[attribute_id]
         flag = "" if old != new_value else "  (unchanged)"
         print("    attr %-5s %12s -> %s%s" % (attribute_id, old, new_value, flag))
     for index, effect_id in sorted(swaps.items()):
+        if index >= len(effects):
+            print("    bonus slot %d  %s -> %s  (ADDED)" % (index, "-", effect_id))
+            continue
         old = effects[index].get("effectID")
         print("    bonus slot %d  %s -> %s%s"
               % (index, old, effect_id, "" if old != effect_id else "  (unchanged)"))

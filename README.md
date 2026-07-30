@@ -285,6 +285,62 @@ and shows nothing. Repoint `iconInfo.folder` at your own namespace and publish t
 
 ---
 
+## 5.3 Trait text (the Info panel's bonus list)
+
+The bonus list in a ship's Information window is **not** in the cFSD tables, so a
+ship with perfectly good `dogmaEffects` still shows nothing. `traits.pyj` asks:
+
+```python
+def has_traits(ship_type_id):
+    return ship_type_id in get_info_bubble_type_bonuses()
+```
+
+and that mapping is `res:/staticdata/infobubbles.static`, key
+`infoBubbleTypeBonuses`. An absent typeID renders an empty panel.
+
+**`.static` files are plain SQLite** — `cache(key TEXT, value TEXT, time FLOAT)`
+with JSON in `value` — so stdlib `sqlite3` and `json` are enough; nothing has to
+run inside the client. (`fsdlite/encoder.py` confirms the payload is yaml/ujson;
+`.static` is its SQLite cache.) The first 16 bytes read `SQLite format 3`, which
+is worth checking before building machinery to open a file.
+
+Entry shape per typeID:
+
+```json
+{"types": {"<skillTypeID>": [{"bonus", "importance", "nameID", "unitID"}]},
+ "roleBonuses": [...], "miscBonuses": []}
+```
+
+`nameID` is a localization message, so cloning the DONOR's entry gives text that
+matches the bonuses the ship actually has - it carries the donor's effects.
+`patch_infobubbles.py` does this.
+
+---
+
+## 5.4 Going back to vanilla
+
+ShipForge's **Vanilla** button returns the client and server to stock and
+**destroys nothing**:
+
+* a publish never deletes a blob - every custom resource stays on disk under its
+  own md5
+* `install.py --revert` restores `resfileindex.txt` from the backup taken before
+  the first publish, undoing every republished stock resource in one step
+* the project, the built hull and the FSD bundle all remain
+
+so **Deploy re-enables the ship**. A `<hull>.vanilla.json` records what was
+disabled.
+
+**It refuses while anything still owns the ship.** Going vanilla removes the
+typeID, so a surviving item references a type the client cannot resolve and
+character select fails with `TypeNotFoundException`. The check reads the items
+table in the server's `gamestore.sqlite` - **not** `characters/data.json`, which
+lags: it reported Capsule 670 for a pilot whose items table already held the
+custom ship. It also requires the client closed. There is an override, but using
+it while the ship is owned will break the client.
+
+---
+
 ## 6. Name, description, stats
 
 * **Localization.** `loc_worker.py` appends message IDs to all 10
