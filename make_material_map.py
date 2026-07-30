@@ -35,8 +35,24 @@ def build(metal_png, out_png, albedo_png=None):
     # Threshold: the model's metallic map peaks at 110/255 (0.43), so any cutoff
     # >= 0.43 selects nothing. p90 is 53, 9% exceed 64, so 0.25 is where the
     # real metal detail lives.
-    out = np.full(metal.shape, SLOT1, np.uint8)               # white_ivory_matt hull
-    out[covered & (metal >= 0.25)] = SLOT2                    # grey_steel_brushed detail
+    # Measured against stock: ours came out at mean 7.7 with 90.9% on slot1,
+    # against stock ab2_t1's 118.5. slot1 is white_ivory_MATT - it has almost no
+    # specular response, so the hull caught no light and read as black whenever
+    # it was not lit head-on. The fix is not a brighter albedo (that was already
+    # at the stock 198 mean); it is putting the surface on a material that
+    # reflects.
+    #
+    # So the hull body goes to grey_steel_BRUSHED - still a light grey, but with
+    # a specular response - and the model's own metal detail steps up to
+    # gunmetal_metallic. slot3 is dark, so it stays a minority: 9% of the surface
+    # here, which is what produced visible panel variation rather than the black
+    # panels a larger share caused previously.
+    # The base covers the WHOLE atlas. `covered` marks where the metallic map is
+    # non-zero, which is only ~12% of it - masking the base by that sent 88% of
+    # the surface back to matt. Atlas cells no geometry samples are irrelevant,
+    # so there is nothing to preserve for them.
+    out = np.full(metal.shape, SLOT2, np.uint8)               # grey_steel_brushed hull
+    out[covered & (metal >= 0.25)] = SLOT3                    # gunmetal_metallic detail
 
     img = np.stack([out, out, out, np.full_like(out, 255)], axis=2)
     Image.fromarray(img, "RGBA").save(out_png)

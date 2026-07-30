@@ -66,16 +66,35 @@ meshes = [o for o in bpy.data.objects if o.type == "MESH"]
 if not meshes:
     raise SystemExit("no mesh objects found")
 
-lo = Vector((1e30,) * 3)
-hi = Vector((-1e30,) * 3)
-for o in meshes:
-    for c in o.bound_box:
-        w = o.matrix_world @ Vector(c)
-        lo = Vector((min(lo.x, w.x), min(lo.y, w.y), min(lo.z, w.z)))
-        hi = Vector((max(hi.x, w.x), max(hi.y, w.y), max(hi.z, w.z)))
+
+def world_vertices(o):
+    n = len(o.data.vertices)
+    if not n:
+        return np.zeros((0, 3))
+    flat = np.empty(n * 3, dtype=np.float64)
+    o.data.vertices.foreach_get("co", flat)
+    m = np.array(o.matrix_world)
+    return flat.reshape(n, 3) @ m[:3, :3].T + m[:3, 3]
+
+
+# The frame MUST come from vertices, not object bound_box corners.
+#
+# A rotated object's transformed local bbox overstates its extent, so a scene of
+# many separate objects yields a bigger box than the same mesh joined - and the
+# frame is centre-on-bbox, so the two disagree. Measured on this model: the
+# joined atlas blend gave Y -125.954..+125.954 while the 25-object source blend
+# gave -106.111..+145.797 from the identical 75,627 vertices. That is a pure
+# 19.843m shift in Y, and it put every locator measured in one blend 19.843m
+# away from geometry exported from the other. Vertices give the same answer for
+# both.
+_world = [world_vertices(o) for o in meshes]
+_all_world = np.concatenate([w for w in _world if len(w)])
+lo = Vector(_all_world.min(axis=0).tolist())
+hi = Vector(_all_world.max(axis=0).tolist())
 scale = TARGET_LENGTH / max(hi - lo)
 centre = (lo + hi) * 0.5
-print("scale x%.4f" % scale)
+print("scale x%.4f  centre %s  (frame from vertices)"
+      % (scale, [round(c, 5) for c in centre]))
 
 
 def to_eve_array(world):

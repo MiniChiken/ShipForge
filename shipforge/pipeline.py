@@ -504,6 +504,52 @@ def _project_catalog(project, sink):
     return out
 
 
+def preview_backup_path(project):
+    return TOOLS / "native_out" / ("%s.previewbackup.json" % project["hullName"])
+
+
+def _index_row(resource_path):
+    """The whole current index line for a logical path, or None."""
+    index = CLIENT_TQ / "resfileindex.txt"
+    target = resource_path.lower()
+    with index.open("r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            row = line.rstrip("\n")
+            if row.split(",")[0].lower() == target:
+                return row
+    return None
+
+
+def revert_preview(project, sink):
+    """Put the index row back the way it was before the last Preview.
+
+    Blobs are never deleted - a publish writes a NEW blob under a new md5 - so
+    restoring is just rewriting one line, and the previewed hull stays on disk if
+    you want it again.
+    """
+    backup = preview_backup_path(project)
+    if not backup.is_file():
+        raise RuntimeError("no preview to revert (no snapshot recorded)")
+    saved = json.loads(backup.read_text("utf-8"))
+    row, resource = saved["row"], saved["resource"]
+
+    index = CLIENT_TQ / "resfileindex.txt"
+    lines = index.read_text(encoding="utf-8", errors="replace").splitlines()
+    target = resource.lower()
+    for position, line in enumerate(lines):
+        if line.split(",")[0].lower() == target:
+            if line == row:
+                _log(sink, "index row already matches the snapshot - nothing to do")
+                return {"reverted": False}
+            lines[position] = row
+            index.write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
+            _log(sink, "restored %s to its pre-preview blob" % resource)
+            _log(sink, "  %s" % row.split(",")[1])
+            backup.unlink()
+            return {"reverted": True, "resource": resource}
+    raise RuntimeError("%s is not in the index any more" % resource)
+
+
 def preview(project, sink, width=1280, height=820, mode="material"):
     """Render the authored hull in the native Trinity viewer.
 
@@ -522,9 +568,30 @@ def preview(project, sink, width=1280, height=820, mode="material"):
             "https://github.com/JohnElysian/Eve-Online-Trinity-Viewer there, or "
             "set SHIPFORGE_VIEWER." % VIEWER)
 
+    # Build first if the artifact does not match the project. Without this,
+    # Preview published whatever hull happened to be on disk, so an edit made
+    # since the last Build simply did not appear - which looks like Preview not
+    # working rather than Preview showing an older ship. Same guard as Deploy.
+    current, reason = build_is_current(project)
+    if not current:
+        _log(sink, "hull is stale (%s) - building it now" % reason)
+        build(project, sink)
+        current, reason = build_is_current(project)
+        if not current:
+            raise RuntimeError("could not produce a current hull: %s" % reason)
+    else:
+        _log(sink, "hull build is current")
+
+    # Snapshot the index row we are about to overwrite so Preview can be undone.
+    # Trinity resolves a hull through the client's resource system, so a preview
+    # has to publish data.black - but nothing says it has to STAY published.
+    snapshot = _index_row(AGGREGATE)
+    if snapshot:
+        preview_backup_path(project).write_text(json.dumps(
+            {"resource": AGGREGATE, "row": snapshot,
+             "takenAt": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=1), "utf-8")
+
     hull_black = TOOLS / "native_out" / ("data-with-%s.black" % project["hullName"])
-    if not hull_black.is_file():
-        raise RuntimeError("build the hull first - %s does not exist" % hull_black)
     publish(sink, AGGREGATE, str(hull_black))
 
     catalog = _project_catalog(project, sink)
