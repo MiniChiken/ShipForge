@@ -18,6 +18,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -601,14 +602,8 @@ def preview(project, sink, width=1280, height=820, mode="material"):
     commands = VIEWER / "runtime" / "commands"
     commands.mkdir(parents=True, exist_ok=True)
     command_path = commands / ("shipforge-%s.jsonl" % project["hullName"])
-    # The viewer defaults to 1.0x, which spins a 1137m hull too fast to judge
-    # placement against. Seed its command file before launch rather than patching
-    # the vendored viewer: it starts reading at offset 0, so a line written here
-    # is picked up on the first poll and survives re-cloning the viewer.
+    command_path.write_text("", "ascii")
     rotation = project.get("previewRotationSpeed", DEFAULT_PREVIEW_ROTATION)
-    command_path.write_text(
-        json.dumps({"command": "rotationspeed", "value": rotation}) + "\n",
-        "ascii")
 
     dna = project_dna(project)
     radius = project.get("shield", {}).get("sphere") or 500
@@ -627,6 +622,21 @@ def preview(project, sink, width=1280, height=820, mode="material"):
     _log(sink, "$ " + " ".join(args))
     # detached: the viewer is an interactive window, not a batch step
     subprocess.Popen(args, cwd=str(CLIENT_TQ), env=env)
+
+    # The viewer defaults to 1.0x, which spins a 1137m hull too fast to judge
+    # placement against. It polls its command file from offset 0, so a line
+    # written BEFORE launch is consumed during startup - before the control
+    # panel exists - and creating the slider then resets the value from its own
+    # default. Send it once the window is up instead. Done on a thread so the
+    # preview call still returns immediately.
+    def _set_rotation():
+        time.sleep(12)
+        with command_path.open("a") as fh:
+            fh.write(json.dumps({"command": "rotationspeed",
+                                 "value": rotation}) + "\n")
+
+    threading.Thread(target=_set_rotation, daemon=True).start()
+    _log(sink, "rotation speed will be set to %gx once the viewer is up" % rotation)
     _log(sink, "viewer launched. Left-drag orbits, right-drag pans, wheel zooms, "
                "right-click toggles its panel, Esc closes it.")
     return {"dna": dna, "radius": radius, "published": AGGREGATE}

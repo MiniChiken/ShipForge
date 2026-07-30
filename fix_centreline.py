@@ -120,6 +120,54 @@ def neutralise_red(a, size, grid, cell, dry_run):
     print("  %d pixels neutralised" % total)
 
 
+# The last thing making the centreline read differently is not a COLOUR at all.
+# Command Area - 99.2% of the dorsal centreline by area - is the only hull
+# material the source model ships a roughness map for:
+#
+#   Command Area   mean 221.7  std 28.1  min 124
+#   every other hull material   flat 255
+#
+# composite_atlas.py leaves a cell at the fill value when a material has no image
+# feeding that channel, so the whole hull is fully matte except this one strip,
+# which is up to 50% smoother. A smoother surface is darker everywhere it is not
+# catching a highlight, so the spine renders as a dark glossy band down the
+# middle - with an albedo, normal, material-band and paint-mask identical to its
+# surroundings, which is why every colour channel measured clean.
+#
+# Compress it toward the surrounding hull rather than flattening it outright:
+# a hard 255 would throw away the only real surface detail on the ship.
+ROUGHNESS_MATCH = "Command Area"
+ROUGHNESS_KEEP = 0.25            # fraction of the original deviation retained
+
+
+def match_roughness(dry_run):
+    r = np.load("venator_r.npy")
+    size = r.shape[0]
+    grid = int(math.ceil(math.sqrt(len(MATS))))
+    cell = size // grid
+    mi = MATS.index(ROUGHNESS_MATCH)
+    y0, x0, c = cell_bounds(mi, size, grid, cell)
+
+    # what the hull around it actually is, rather than an assumed 255
+    others = [MATS.index(n) for n in REFERENCE]
+    ref = float(np.median([
+        r[cell_bounds(o, size, grid, cell)[0]:cell_bounds(o, size, grid, cell)[0] + c,
+          cell_bounds(o, size, grid, cell)[1]:cell_bounds(o, size, grid, cell)[1] + c,
+          :3].mean()
+        for o in others]))
+
+    block = r[y0:y0 + c, x0:x0 + c, :3].astype(np.float32)
+    fixed = np.clip(ref - (ref - block) * ROUGHNESS_KEEP, 0, 255)
+    print("  hull reference roughness %.1f" % ref)
+    print("  %-14s mean %.1f std %.1f min %.0f  ->  mean %.1f std %.1f min %.0f"
+          % (ROUGHNESS_MATCH, block.mean(), block.std(), block.min(),
+             fixed.mean(), fixed.std(), fixed.min()))
+    if not dry_run:
+        r[y0:y0 + c, x0:x0 + c, :3] = fixed.astype(np.uint8)
+        np.save("venator_r.npy", r)
+        print("  wrote venator_r.npy")
+
+
 def main(dry_run):
     a = np.load("venator_a.npy")
     size = a.shape[0]
@@ -151,6 +199,9 @@ def main(dry_run):
 
     print("\nper-pixel red removal:")
     neutralise_red(a, size, grid, cell, dry_run)
+
+    print("\nroughness match:")
+    match_roughness(dry_run)
 
     if dry_run:
         print("\ndry run - nothing written")
