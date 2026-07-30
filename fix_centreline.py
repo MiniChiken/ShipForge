@@ -62,6 +62,64 @@ def describe(a, mi, size, grid, cell):
     return m, sat, float(m @ LUMA)
 
 
+# Per-pixel red removal. A whole-cell pass cannot reach the remaining stripes,
+# because they are painted INSIDE the two biggest hull materials rather than in a
+# cell of their own:
+#
+#   Back Half    1.66% of pixels reddish, mean [104.6 59.0 53.2]
+#   Front Half   0.79%                         [111.7 64.6 63.5]
+#   Aux Hangar Door(.001) 0.18%                [144.8 58.5 48.0]
+#
+# Those cells ARE the hull, so neutralising them wholesale would grey the entire
+# ship. Averaged over a cell a thin stripe barely moves the mean either - Back
+# Half reads saturation 0.055 - which is why measuring cell means said the atlas
+# was already clean. Mask on colour instead, and only where it actually fires.
+SAT_LO, SAT_HI = 0.12, 0.28      # feathered so the stripe edge does not band
+MIN_VALUE = 40                   # ignore near-black pixels, where hue is noise
+
+
+def neutralise_red(a, size, grid, cell, dry_run):
+    """Grey out reddish pixels wherever they appear, matching local brightness."""
+    total = 0
+    for mi in range(grid * grid):
+        y0, x0, c = cell_bounds(mi, size, grid, cell)
+        block = a[y0:y0 + c, x0:x0 + c, :3].astype(np.float32)
+        hi = block.max(axis=2)
+        lo = block.min(axis=2)
+        sat = np.where(hi > 0, (hi - lo) / np.maximum(hi, 1e-6), 0.0)
+
+        # red = the R channel is the strongest one, not merely present
+        is_red = (block[..., 0] >= block[..., 1]) & (block[..., 0] >= block[..., 2])
+        weight = np.clip((sat - SAT_LO) / (SAT_HI - SAT_LO), 0.0, 1.0)
+        weight = np.where(is_red & (hi > MIN_VALUE), weight, 0.0)
+        touched = weight > 0.01
+        if not touched.any():
+            continue
+
+        grey = block @ LUMA
+        # Match the surrounding hull's brightness, or a red stripe simply becomes
+        # a dark grey one - the stripes measure ~70 luma against a ~140 hull.
+        surround = grey[(weight == 0.0) & (grey > MIN_VALUE)]
+        if surround.size < 64:
+            continue
+        scale = float(surround.mean()) / max(1e-6, float(grey[touched].mean()))
+        fixed = np.clip(grey * scale, 0, 255)
+
+        w = weight[..., None]
+        out = block * (1.0 - w) + np.repeat(fixed[:, :, None], 3, axis=2) * w
+        if not dry_run:
+            a[y0:y0 + c, x0:x0 + c, :3] = np.clip(out, 0, 255).astype(np.uint8)
+        count = int(touched.sum())
+        total += count
+        print("  cell %2d  %6d px (%.2f%%)  red mean [%5.1f %5.1f %5.1f] "
+              "lum %5.1f -> %5.1f  (x%.2f)"
+              % (mi, count, 100.0 * count / touched.size,
+                 block[touched][:, 0].mean(), block[touched][:, 1].mean(),
+                 block[touched][:, 2].mean(),
+                 grey[touched].mean(), fixed[touched].mean(), scale))
+    print("  %d pixels neutralised" % total)
+
+
 def main(dry_run):
     a = np.load("venator_a.npy")
     size = a.shape[0]
@@ -90,6 +148,9 @@ def main(dry_run):
               "   ->  [%5.1f %5.1f %5.1f] sat %.3f lum %5.1f  (x%.2f)"
               % (name, mi, before[0], before[1], before[2], sat, lum,
                  after[0], after[1], after[2], sat_a, lum_a, scale))
+
+    print("\nper-pixel red removal:")
+    neutralise_red(a, size, grid, cell, dry_run)
 
     if dry_run:
         print("\ndry run - nothing written")

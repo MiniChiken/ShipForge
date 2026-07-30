@@ -429,6 +429,9 @@ def live_type_missing(project, sink):
 
 
 VIEWER = Path(os.environ.get("SHIPFORGE_VIEWER", r"C:\evejs\tools\trinity-viewer"))
+# Slow enough to read placement off a moving hull. Override per project with
+# "previewRotationSpeed"; the viewer clamps to 0.0-3.0.
+DEFAULT_PREVIEW_ROTATION = 0.05
 
 
 def project_dna(project):
@@ -598,7 +601,14 @@ def preview(project, sink, width=1280, height=820, mode="material"):
     commands = VIEWER / "runtime" / "commands"
     commands.mkdir(parents=True, exist_ok=True)
     command_path = commands / ("shipforge-%s.jsonl" % project["hullName"])
-    command_path.write_text("", "ascii")
+    # The viewer defaults to 1.0x, which spins a 1137m hull too fast to judge
+    # placement against. Seed its command file before launch rather than patching
+    # the vendored viewer: it starts reading at offset 0, so a line written here
+    # is picked up on the first poll and survives re-cloning the viewer.
+    rotation = project.get("previewRotationSpeed", DEFAULT_PREVIEW_ROTATION)
+    command_path.write_text(
+        json.dumps({"command": "rotationspeed", "value": rotation}) + "\n",
+        "ascii")
 
     dna = project_dna(project)
     radius = project.get("shield", {}).get("sphere") or 500
